@@ -1485,5 +1485,15 @@
   render();
 })();
 </script>
+<script>
+  // Registers sw.js (must be uploaded alongside this file) so the app keeps
+  // working with no signal after the first successful load. Silently does
+  // nothing if service workers aren't supported in this context (e.g. file://).
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", function(){
+      navigator.serviceWorker.register("./sw.js").catch(function(){});
+    });
+  }
+</script>
 </body>
 </html>
