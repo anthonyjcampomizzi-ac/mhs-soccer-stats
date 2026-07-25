@@ -1621,7 +1621,7 @@
         html += '<div class="row">';
         html += cloudBtn;
         html += '<button class="btn ghost small" data-exportgame="'+g.id+'">Export CSV</button>';
-        html += '<button class="btn ghost small" data-delgame="'+g.id+'">Delete</button>';
+        html += '<button class="btn ghost small" data-delgame="'+g.id+'">'+(g.cloudStatus==="uploaded" ? "Delete Everywhere" : "Delete")+'</button>';
         html += '</div>';
         html += '</div>';
         html += '</div>';
@@ -1678,10 +1678,31 @@
       btn.addEventListener("click", function(e){
         e.stopPropagation();
         var id = btn.getAttribute("data-delgame");
-        if(!confirm("Delete this game and its events? This can't be undone.")) return;
-        state.games = state.games.filter(function(g){ return g.id!==id; });
-        save();
-        renderStats();
+        var g = state.games.filter(function(gg){ return gg.id===id; })[0];
+        if(!g) return;
+        var wasUploaded = g.cloudStatus === "uploaded";
+        var msg = wasUploaded
+          ? "Delete this game everywhere \u2014 on this device and in the cloud? This can't be undone."
+          : "Delete this game and its events? This can't be undone.";
+        if(!confirm(msg)) return;
+        if(wasUploaded){
+          if(!cloudReady() || !navigator.onLine){
+            showToast("Can't delete an uploaded game while offline \u2014 try again when connected");
+            return;
+          }
+          window.CloudSync.deleteGame(id).then(function(){
+            state.games = state.games.filter(function(gg){ return gg.id!==id; });
+            save();
+            showToast("Deleted everywhere");
+            renderStats();
+          }).catch(function(err){
+            showToast("Cloud delete failed \u2014 try again");
+          });
+        } else {
+          state.games = state.games.filter(function(gg){ return gg.id!==id; });
+          save();
+          renderStats();
+        }
       });
     });
   }
@@ -1886,12 +1907,17 @@
       });
     }
 
+    function deleteGame(gameId){
+      return fsMod.deleteDoc(fsMod.doc(db, "games", gameId));
+    }
+
     window.CloudSync = {
       isReady: function(){ return !!(auth && auth.currentUser); },
       pushRoster: pushRoster,
       pullRoster: pullRoster,
       uploadGame: uploadGame,
-      pullGames: pullGames
+      pullGames: pullGames,
+      deleteGame: deleteGame
     };
   }).catch(function(err){
     console.error("MiddieStat cloud sync: failed to load Firebase SDK.", err);
