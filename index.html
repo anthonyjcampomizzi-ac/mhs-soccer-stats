@@ -1014,9 +1014,17 @@
           showToast("Remove from active game first");
           return;
         }
-        state.roster = state.roster.filter(function(p){ return p.id!==id; });
-        save();
-        renderRoster();
+        if(!cloudReady() || !navigator.onLine){
+          showToast("Can't remove players while offline \u2014 try again when connected");
+          return;
+        }
+        window.CloudSync.deletePlayer(id).then(function(){
+          state.roster = state.roster.filter(function(p){ return p.id!==id; });
+          save();
+          renderRoster();
+        }).catch(function(err){
+          showToast("Couldn't remove \u2014 try again");
+        });
       });
     });
 
@@ -2404,6 +2412,10 @@
       });
     }
 
+    function deletePlayer(playerId){
+      return fsMod.deleteDoc(fsMod.doc(db, "roster", playerId));
+    }
+
     function uploadGame(game){
       var payload = JSON.parse(JSON.stringify(game));
       payload.running = false;
@@ -2434,6 +2446,7 @@
       sendPasswordReset: sendPasswordReset,
       pushRoster: pushRoster,
       pullRoster: pullRoster,
+      deletePlayer: deletePlayer,
       uploadGame: uploadGame,
       pullGames: pullGames,
       deleteGame: deleteGame
