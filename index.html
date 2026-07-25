@@ -170,7 +170,7 @@
     margin-bottom:5px;
     font-weight:600;
   }
-  input[type=text], input[type=date], input[type=number], textarea{
+  input[type=text], input[type=date], input[type=number], select, textarea{
     width:100%;
     background:var(--panel-2);
     border:1px solid var(--line);
@@ -180,6 +180,7 @@
     font-size:15px;
     font-family:inherit;
   }
+  select{ appearance:none; -webkit-appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20' fill='%238a93a3'%3E%3Cpath d='M5.5 7.5l4.5 4.5 4.5-4.5' stroke='%238a93a3' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 12px center; padding-right:34px; }
   textarea{resize:vertical; min-height:90px;}
   input::placeholder, textarea::placeholder{color:#525b6b;}
 
@@ -483,10 +484,77 @@
     line-height:1.6;
     padding-bottom:6px;
   }
+
+  .auth-gate{
+    position:fixed;
+    inset:0;
+    background:var(--ink);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:24px;
+    padding-top:calc(24px + var(--safe-t));
+    padding-bottom:calc(24px + var(--safe-b));
+    z-index:100;
+  }
+  .auth-card{
+    width:100%;
+    max-width:360px;
+  }
+  .auth-brand{
+    text-align:center;
+    font-size:24px;
+    font-weight:800;
+    color:var(--white);
+    margin-bottom:4px;
+    letter-spacing:0.01em;
+  }
+  .auth-sub{
+    text-align:center;
+    font-size:12px;
+    color:var(--dim);
+    text-transform:uppercase;
+    letter-spacing:0.08em;
+    margin-bottom:24px;
+  }
+  .auth-error{
+    background:rgba(214,69,90,0.15);
+    border:1px solid var(--danger);
+    color:#ffb3bd;
+    font-size:13px;
+    padding:10px 12px;
+    border-radius:10px;
+    margin-bottom:14px;
+  }
+  .auth-status{
+    text-align:center;
+    font-size:12px;
+    color:var(--dim);
+    margin-top:14px;
+  }
 </style>
 </head>
 <body>
-<div id="app">
+<div id="authGate" class="auth-gate">
+  <div class="auth-card">
+    <div class="auth-brand">MiddieStat</div>
+    <div class="auth-sub">Sign in to continue</div>
+    <div id="authError" class="auth-error" style="display:none;"></div>
+    <label class="field-label">Email</label>
+    <input type="email" id="authEmail" autocomplete="email" placeholder="you@example.com">
+    <div style="height:10px"></div>
+    <label class="field-label">Password</label>
+    <input type="password" id="authPassword" autocomplete="current-password" placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;">
+    <div style="height:16px"></div>
+    <button class="btn block" id="authSubmitBtn">Log In</button>
+    <div style="height:10px"></div>
+    <button class="btn ghost block" id="authToggleModeBtn" type="button">Need an account? Create one</button>
+    <div style="height:10px"></div>
+    <button class="btn ghost small" id="authForgotBtn" type="button" style="width:100%;">Forgot password?</button>
+    <div id="authStatus" class="auth-status"></div>
+  </div>
+</div>
+<div id="app" style="display:none;">
   <header class="topbar">
     <div class="brand">
       <b id="headerTitle">MiddieStat</b>
@@ -575,10 +643,39 @@
     shootoutOppMissed: "Opponent Shootout Kick (Missed)"
   };
 
-  var PERIOD_DURATIONS = { reg1:2400, reg2:2400, et1:900, et2:900 };
-  var PERIOD_LABELS = { reg1:"1st Half", reg2:"2nd Half", et1:"Extra Time 1", et2:"Extra Time 2", shootout:"Shootout" };
-  function periodDurationSec(key){ return PERIOD_DURATIONS[key] || 0; }
-  function periodLabel(key){ return PERIOD_LABELS[key] || key; }
+  // Extra time and shootout are fixed-length regardless of game type — only regulation
+  // periods (reg1/reg2) vary per game, defined by that game's own periodPlan.
+  var FIXED_PERIOD_DURATIONS = { et1:900, et2:900 };
+  var FIXED_PERIOD_LABELS = { et1:"Extra Time 1", et2:"Extra Time 2", shootout:"Shootout" };
+  var GAME_TYPES = [
+    {key:"varsity", label:"Varsity"},
+    {key:"jv", label:"JV"},
+    {key:"tournament", label:"Tournament"},
+    {key:"scrimmage", label:"Scrimmage"}
+  ];
+  function standardPeriodPlan(){
+    return [
+      {key:"reg1", label:"1st Half", durationSec:2400},
+      {key:"reg2", label:"2nd Half", durationSec:2400}
+    ];
+  }
+  function gameTypeLabel(key){
+    var t = GAME_TYPES.filter(function(g){ return g.key===key; })[0];
+    return t ? t.label : key;
+  }
+  function findPlanPeriod(g, key){
+    return (g.periodPlan || []).filter(function(p){ return p.key===key; })[0];
+  }
+  function periodDurationSec(g, key){
+    if(FIXED_PERIOD_DURATIONS[key] !== undefined) return FIXED_PERIOD_DURATIONS[key];
+    var p = findPlanPeriod(g, key);
+    return p ? p.durationSec : 0;
+  }
+  function periodLabel(g, key){
+    if(FIXED_PERIOD_LABELS[key]) return FIXED_PERIOD_LABELS[key];
+    var p = findPlanPeriod(g, key);
+    return p ? p.label : key;
+  }
   function eventPeriod(e){ return e.period || e.half || ""; }
   function computeScore(g){
     var our = 0, their = 0;
@@ -588,6 +685,66 @@
       if(e.stat==="goalsAllowed") their++;
     });
     return {our:our, their:their};
+  }
+
+  // ---------- Roles & Permissions ----------
+  // "public" (unauthenticated access) is intentionally excluded for now — held off per
+  // product decision until it's specifically scoped.
+  var ROLES = ["admin", "coach", "tracker", "player"];
+
+  // One entry per module.function from the role matrix. Modules marked "not yet built"
+  // have no UI to attach to today — the config exists so that whoever builds Coaching
+  // Reports / Game Summary / Player Cards / Season Summary can call can() immediately
+  // rather than inventing a permission scheme at that point.
+  var PERMISSIONS = {
+    roster: {
+      addPlayer: ["admin"],
+      deletePlayer: ["admin"]
+    },
+    liveGame: {
+      all: ["admin", "tracker"]
+    },
+    season: {
+      deleteGame: ["admin"],
+      csvExport: ["admin"],
+      uploadToCloud: ["admin", "tracker"]
+    },
+    // --- Not yet built. Config only, ready to attach when each module exists. ---
+    coachingReports: {
+      view: ["admin", "coach"],
+      generate: ["admin", "coach"],
+      export: ["admin", "coach"]
+    },
+    gameSummary: {
+      view: ["admin", "coach", "player"],
+      generate: ["admin"],
+      export: ["admin", "coach"]
+    },
+    playerCards: {
+      view: ["admin", "coach", "player"],
+      generate: ["admin"],
+      export: ["admin", "coach", "player"]
+    },
+    seasonSummary: {
+      view: ["admin", "coach", "player"],
+      generate: ["admin"],
+      export: ["admin", "coach"]
+    }
+  };
+
+  function can(role, moduleKey, action){
+    var mod = PERMISSIONS[moduleKey];
+    if(!mod) return false;
+    var allowed = mod[action];
+    if(!allowed) return false;
+    return allowed.indexOf(role) !== -1;
+  }
+
+  // Set once authentication resolves (see the "cloudsync-authenticated" listener below).
+  // Stays null until someone's actually signed in with a role on their profile.
+  var currentAuthRole = null;
+  function getCurrentRole(){
+    return currentAuthRole;
   }
 
   // ---------- Event entry wizard ----------
@@ -658,6 +815,7 @@
     return { roster:[], games:[], activeGameId:null, activeTab:"roster", activePlayerId:null, shootoutKickerId:null, theme:"dark" };
   }
   var state = loadState();
+  save();
   var openGameDetail = {};
 
   function loadState(){
@@ -668,7 +826,10 @@
       var d = defaultState();
       for(var k in d){ if(!(k in parsed)) parsed[k] = d[k]; }
       if(parsed.games){
-        parsed.games.forEach(function(g){ if(!g.cloudStatus) g.cloudStatus = "local"; });
+        parsed.games.forEach(function(g){
+          if(!g.cloudStatus) g.cloudStatus = "local";
+          if(!g.gameType) g.gameType = g.isTournament ? "tournament" : "varsity";
+        });
       }
       return parsed;
     }catch(e){
@@ -699,6 +860,16 @@
     }
     if(!g.cloudStatus){
       g.cloudStatus = "local";
+      save();
+    }
+    if(!g.gameType){
+      // Games created before Game Type existed only had the isTournament toggle.
+      // Best-effort backfill — flag it so it's easy to spot and correct later if wrong.
+      g.gameType = g.isTournament ? "tournament" : "varsity";
+      save();
+    }
+    if(!g.periodPlan){
+      g.periodPlan = standardPeriodPlan();
       save();
     }
     return g;
@@ -759,13 +930,19 @@
 
   // ---------- Roster tab ----------
   function renderRoster(){
+    var role = getCurrentRole();
+    var canAdd = can(role, "roster", "addPlayer");
+    var canDelete = can(role, "roster", "deletePlayer");
+
     var html = "";
-    html += '<div class="card">';
-    html += '<label class="field-label">Add players</label>';
-    html += '<textarea id="rosterInput" placeholder="One name per line, or comma-separated&#10;e.g.&#10;Ava Martinez&#10;Ben Lee&#10;Cara O\'Neal"></textarea>';
-    html += '<div style="height:10px"></div>';
-    html += '<button class="btn block" id="addRosterBtn">Add to Roster</button>';
-    html += '</div>';
+    if(canAdd){
+      html += '<div class="card">';
+      html += '<label class="field-label">Add players</label>';
+      html += '<textarea id="rosterInput" placeholder="One name per line, or comma-separated&#10;e.g.&#10;Ava Martinez&#10;Ben Lee&#10;Cara O\'Neal"></textarea>';
+      html += '<div style="height:10px"></div>';
+      html += '<button class="btn block" id="addRosterBtn">Add to Roster</button>';
+      html += '</div>';
+    }
 
     var cloudLine = !window.CloudSync ? "Cloud loading\u2026" : (!cloudReady() ? "Cloud connecting\u2026" : (navigator.onLine ? "Synced to cloud" : "Offline \u2014 will sync when connected"));
     html += '<div class="card" style="display:flex; align-items:center; justify-content:space-between; gap:10px;">';
@@ -781,16 +958,32 @@
       state.roster.forEach(function(p){
         html += '<div class="roster-item">';
         html += '<span class="name">' + escapeHtml(p.name) + '</span>';
-        html += '<button class="rm" data-rm="'+p.id+'">&#10005;</button>';
+        if(canDelete) html += '<button class="rm" data-rm="'+p.id+'">&#10005;</button>';
         html += '</div>';
       });
     }
     html += '</div>';
+
+    var acctEmail = window.CloudSync ? window.CloudSync.getEmail() : null;
+    var roleLabel = role ? (role.charAt(0).toUpperCase() + role.slice(1)) : "\u2014";
+    html += '<div class="card" style="display:flex; align-items:center; justify-content:space-between; gap:10px;">';
+    html += '<div style="font-size:12px; color:var(--dim);">Signed in as<br><b style="color:var(--white);">'+escapeHtml(acctEmail || "\u2014")+'</b> &middot; '+escapeHtml(roleLabel)+'</div>';
+    html += '<button class="btn ghost small" id="logoutBtn">Log Out</button>';
+    html += '</div>';
+
     html += '<div class="footer-note">Data is saved on this device automatically, and synced to the cloud when connected.</div>';
 
     document.getElementById("main").innerHTML = html;
 
-    document.getElementById("addRosterBtn").addEventListener("click", function(){
+    var logoutBtn = document.getElementById("logoutBtn");
+    if(logoutBtn) logoutBtn.addEventListener("click", function(){
+      if(!confirm("Log out of MiddieStat on this device?")) return;
+      if(window.CloudSync) window.CloudSync.signOutUser();
+    });
+
+    var addRosterBtn = document.getElementById("addRosterBtn");
+    if(addRosterBtn) addRosterBtn.addEventListener("click", function(){
+      if(!can(getCurrentRole(), "roster", "addPlayer")){ showToast("You don't have permission to add players"); return; }
       var raw = document.getElementById("rosterInput").value;
       if(!raw.trim()) return;
       var names = raw.split(/[\n,]/).map(function(s){return s.trim();}).filter(Boolean);
@@ -814,6 +1007,7 @@
 
     document.querySelectorAll("[data-rm]").forEach(function(btn){
       btn.addEventListener("click", function(){
+        if(!can(getCurrentRole(), "roster", "deletePlayer")){ showToast("You don't have permission to remove players"); return; }
         var id = btn.getAttribute("data-rm");
         var g = getActiveGame();
         if(g && g.playerIds.indexOf(id)!==-1){
@@ -849,7 +1043,7 @@
     return el;
   }
   function computeRemaining(g){
-    return periodDurationSec(g.periodKey) - computePeriodElapsed(g);
+    return periodDurationSec(g, g.periodKey) - computePeriodElapsed(g);
   }
   function fmtRemaining(remainingSec){
     var stoppage = remainingSec < 0;
@@ -951,7 +1145,7 @@
         entryState.onTarget = null;
         entryState.ts = Date.now();
         entryState.clockSec = computePeriodElapsed(g);
-        entryState.period = periodLabel(g.periodKey);
+        entryState.period = periodLabel(g, g.periodKey);
         entryState.step = "player";
         renderGame();
       });
@@ -987,7 +1181,7 @@
     if(confirmEntryBtn) confirmEntryBtn.addEventListener("click", function(){
       var ts = entryState.ts || Date.now();
       var clockSec = entryState.clockSec != null ? entryState.clockSec : computePeriodElapsed(g);
-      var period = entryState.period || periodLabel(g.periodKey);
+      var period = entryState.period || periodLabel(g, g.periodKey);
       g.events.push({ id: uid("e"), playerId: entryState.rootPlayerId, stat: entryState.rootKey, ts: ts, clockSec: clockSec, period: period });
       var toastMsg = statLabel(entryState.rootKey) + " \u2014 " + playerName(entryState.rootPlayerId);
       if(entryState.assistPlayerId !== undefined && entryState.assistPlayerId !== null){
@@ -1008,6 +1202,11 @@
   }
 
   function renderGame(){
+    if(!can(getCurrentRole(), "liveGame", "all")){
+      document.getElementById("main").innerHTML = '<div class="empty-hint">You don\'t have permission to access live game tracking.</div>';
+      return;
+    }
+
     var g = getActiveGame();
     if(clockInterval){ clearInterval(clockInterval); clockInterval = null; }
 
@@ -1027,7 +1226,7 @@
     var html = "";
     html += '<div class="game-meta">';
     html += '<div><div class="opp">vs ' + escapeHtml(g.opponent) + '</div>';
-    html += '<div class="sub">' + fmtDate(g.date) + (g.isTournament ? " &middot; Tournament" : "") + '</div></div>';
+    html += '<div class="sub">' + fmtDate(g.date) + ' &middot; ' + escapeHtml(gameTypeLabel(g.gameType)) + '</div></div>';
     html += '<div style="text-align:right;">';
     html += '<div style="font-size:20px; font-weight:800;">' + score.our + ' &ndash; ' + score.their + '</div>';
     html += '<div style="font-size:10px; color:var(--dim); text-transform:uppercase; letter-spacing:.05em;">Us &ndash; Them</div>';
@@ -1038,7 +1237,7 @@
     html += '<div class="clock" id="clockDisplay" style="'+(remaining<0?"color:var(--gold);":"")+'">' + fmtRemaining(remaining) + '</div>';
     html += '<button class="btn small" id="clockToggle">' + (g.running ? "Pause" : "Start") + '</button>';
     html += '<div class="spacer"></div>';
-    html += '<span class="half-chip">' + escapeHtml(periodLabel(g.periodKey)) + '</span>';
+    html += '<span class="half-chip">' + escapeHtml(periodLabel(g, g.periodKey)) + '</span>';
     html += '</div>';
 
     if(g.awaitingDecision === "et"){
@@ -1052,7 +1251,7 @@
       html += '<div class="row"><button class="btn" id="startShootoutBtn">Start Shootout</button><button class="btn ghost" id="endDrawBtn2">End Game (Draw)</button></div>';
       html += '</div>';
     } else {
-      html += '<button class="btn ghost block" id="endPeriodBtn" style="margin-bottom:14px;">End ' + escapeHtml(periodLabel(g.periodKey)) + '</button>';
+      html += '<button class="btn ghost block" id="endPeriodBtn" style="margin-bottom:14px;">End ' + escapeHtml(periodLabel(g, g.periodKey)) + '</button>';
     }
 
     html += trackingSectionHtml(g);
@@ -1106,16 +1305,21 @@
     var endPeriodBtn = document.getElementById("endPeriodBtn");
     if(endPeriodBtn){
       endPeriodBtn.addEventListener("click", function(){
-        if(!confirm("End " + periodLabel(g.periodKey) + "?")) return;
+        if(!confirm("End " + periodLabel(g, g.periodKey) + "?")) return;
         g.running = false;
         g.periodElapsedSec = computePeriodElapsed(g);
         g.runStartedAt = null;
         var sc = computeScore(g);
-        if(g.periodKey === "reg1"){
-          g.periodKey = "reg2";
+        var planIdx = -1;
+        for(var i=0;i<g.periodPlan.length;i++){ if(g.periodPlan[i].key===g.periodKey){ planIdx=i; break; } }
+
+        if(planIdx !== -1 && planIdx < g.periodPlan.length - 1){
+          // More regulation periods left in this game's plan (e.g. 1st half just ended).
+          g.periodKey = g.periodPlan[planIdx+1].key;
           g.periodElapsedSec = 0;
-        } else if(g.periodKey === "reg2"){
-          if(g.isTournament && sc.our === sc.their){
+        } else if(planIdx !== -1){
+          // Just finished the last regulation period in the plan.
+          if(g.gameType === "tournament" && sc.our === sc.their){
             g.awaitingDecision = "et";
           } else {
             finishGame(g);
@@ -1360,11 +1564,25 @@
     html += '<div style="height:10px"></div>';
     html += '<label class="field-label">Date</label>';
     html += '<input type="date" id="dateInput" value="'+todayStr()+'">';
-    html += '<div style="height:14px"></div>';
-    html += '<div class="pick-row" style="border:none; padding:0;">';
-    html += '<span class="name">Tournament game<br><span style="font-weight:400; font-size:12px; color:var(--dim);">Allows extra time &amp; shootout if tied</span></span>';
-    html += '<button class="toggle" id="tournamentToggle"></button>';
+    html += '<div style="height:10px"></div>';
+    html += '<label class="field-label">Game Type</label>';
+    html += '<select id="gameTypeSelect">';
+    GAME_TYPES.forEach(function(t){
+      html += '<option value="'+t.key+'">'+t.label+'</option>';
+    });
+    html += '</select>';
+    html += '<div style="font-size:11.5px; color:var(--dim); margin-top:6px;">Tournament allows extra time &amp; a shootout if tied after regulation.</div>';
     html += '</div>';
+
+    html += '<div class="card" id="scrimmageDetails" style="display:none;">';
+    html += '<label class="field-label">Scrimmage Format</label>';
+    html += '<div class="row">';
+    html += '<button class="btn small" id="fmtSinglePeriod" type="button">Single Period</button>';
+    html += '<button class="btn ghost small" id="fmtTwoHalves" type="button">Two Halves</button>';
+    html += '</div>';
+    html += '<div style="height:12px"></div>';
+    html += '<label class="field-label" id="scrimmageLengthLabel">Period Length (minutes)</label>';
+    html += '<input type="number" id="scrimmageLengthInput" min="1" step="1" value="25">';
     html += '</div>';
 
     html += '<h2 class="section-title">Players in this game</h2>';
@@ -1383,7 +1601,7 @@
 
     var picked = {};
     state.roster.forEach(function(p){ picked[p.id] = true; });
-    var isTournament = false;
+    var scrimmageFormat = "single";
 
     document.querySelectorAll("[data-pick]").forEach(function(btn){
       btn.addEventListener("click", function(){
@@ -1392,27 +1610,60 @@
         btn.classList.toggle("on", picked[id]);
       });
     });
-    document.getElementById("tournamentToggle").addEventListener("click", function(){
-      isTournament = !isTournament;
-      this.classList.toggle("on", isTournament);
-    });
+
+    var gameTypeSelect = document.getElementById("gameTypeSelect");
+    var scrimmageDetails = document.getElementById("scrimmageDetails");
+    var scrimmageLengthLabel = document.getElementById("scrimmageLengthLabel");
+    function updateScrimmageVisibility(){
+      scrimmageDetails.style.display = (gameTypeSelect.value === "scrimmage") ? "block" : "none";
+    }
+    gameTypeSelect.addEventListener("change", updateScrimmageVisibility);
+    updateScrimmageVisibility();
+
+    var fmtSingleBtn = document.getElementById("fmtSinglePeriod");
+    var fmtTwoBtn = document.getElementById("fmtTwoHalves");
+    function setScrimmageFormat(fmt){
+      scrimmageFormat = fmt;
+      fmtSingleBtn.classList.toggle("ghost", fmt!=="single");
+      fmtTwoBtn.classList.toggle("ghost", fmt!=="two");
+      scrimmageLengthLabel.textContent = (fmt==="single") ? "Period Length (minutes)" : "Half Length (minutes)";
+    }
+    fmtSingleBtn.addEventListener("click", function(){ setScrimmageFormat("single"); });
+    fmtTwoBtn.addEventListener("click", function(){ setScrimmageFormat("two"); });
+    setScrimmageFormat("single");
 
     document.getElementById("startGameBtn").addEventListener("click", function(){
       var opp = document.getElementById("oppInput").value.trim() || "Opponent";
       var date = document.getElementById("dateInput").value || todayStr();
       var ids = state.roster.filter(function(p){return picked[p.id];}).map(function(p){return p.id;});
       if(ids.length===0){ showToast("Pick at least one player"); return; }
+
+      var gameType = gameTypeSelect.value;
+      var periodPlan;
+      if(gameType === "scrimmage"){
+        var lenMin = parseFloat(document.getElementById("scrimmageLengthInput").value);
+        if(!lenMin || lenMin <= 0){ showToast("Enter a period length"); return; }
+        var lenSec = Math.round(lenMin * 60);
+        periodPlan = (scrimmageFormat === "single")
+          ? [{key:"reg1", label:"Period", durationSec:lenSec}]
+          : [{key:"reg1", label:"1st Half", durationSec:lenSec}, {key:"reg2", label:"2nd Half", durationSec:lenSec}];
+      } else {
+        periodPlan = standardPeriodPlan();
+      }
+
       var g = {
         id: uid("g"),
         opponent: opp,
         date: date,
         playerIds: ids,
         events: [],
-        periodKey: "reg1",
+        gameType: gameType,
+        periodPlan: periodPlan,
+        periodKey: periodPlan[0].key,
         periodElapsedSec: 0,
         running: false,
         runStartedAt: null,
-        isTournament: isTournament,
+        isTournament: gameType === "tournament",
         awaitingDecision: null,
         status: "active",
         cloudStatus: "local",
@@ -1547,7 +1798,7 @@
   }
 
   function exportEventsCSV(games, label){
-    var rows = [["Date","Opponent","Player","Stat","Period","Game Clock","Logged At"]];
+    var rows = [["Date","Opponent","Game Type","Player","Stat","Period","Game Clock","Logged At"]];
     var sortedGames = games.slice().sort(function(a,b){
       return (a.date||"").localeCompare(b.date||"") || (a.createdAt||0)-(b.createdAt||0);
     });
@@ -1557,6 +1808,7 @@
         rows.push([
           fmtDate(g.date),
           g.opponent,
+          gameTypeLabel(g.gameType),
           playerName(e.playerId),
           statLabel(e.stat),
           eventPeriod(e),
@@ -1568,8 +1820,16 @@
     downloadCSV(rows, label);
   }
 
+  var gameTypeFilter = {varsity:true, jv:true, tournament:true, scrimmage:true};
+
   function renderStats(){
-    var completed = state.games.filter(function(g){ return g.status==="completed"; });
+    var role = getCurrentRole();
+    var canExport = can(role, "season", "csvExport");
+    var canUpload = can(role, "season", "uploadToCloud");
+    var canDeleteGame = can(role, "season", "deleteGame");
+
+    var allCompleted = state.games.filter(function(g){ return g.status==="completed"; });
+    var completed = allCompleted.filter(function(g){ return gameTypeFilter[g.gameType]; });
     var totals = aggregate(completed);
     var playerIds = state.roster.map(function(p){return p.id;})
       .filter(function(pid){ return totals[pid]; })
@@ -1586,19 +1846,30 @@
     html += '<button class="btn ghost small" id="refreshCloudBtn">Refresh</button>';
     html += '</div>';
 
-    html += '<h2 class="section-title">Season Totals (' + completed.length + ' game' + (completed.length===1?"":"s") + ')</h2>';
+    html += '<div class="chip-scroll" style="padding-top:0;">';
+    GAME_TYPES.forEach(function(t){
+      var on = gameTypeFilter[t.key];
+      html += '<button class="chip'+(on?" selected":"")+'" data-typefilter="'+t.key+'">'+t.label+'</button>';
+    });
+    html += '</div>';
+
+    html += '<h2 class="section-title">Season Totals (' + completed.length + ' of ' + allCompleted.length + ' game' + (allCompleted.length===1?"":"s") + ')</h2>';
     html += '<div class="card">';
     html += buildStatsTable(totals, playerIds, "season");
     html += '</div>';
-    html += '<div class="row">';
-    html += '<button class="btn ghost" id="exportSeasonBtn">Export Totals CSV</button>';
-    html += '<button class="btn ghost" id="exportEventsBtn">Export All Events CSV</button>';
-    html += '</div>';
+    if(canExport){
+      html += '<div class="row">';
+      html += '<button class="btn ghost" id="exportSeasonBtn">Export Totals CSV</button>';
+      html += '<button class="btn ghost" id="exportEventsBtn">Export All Events CSV</button>';
+      html += '</div>';
+    }
 
     html += '<h2 class="section-title">Game History</h2>';
     html += '<div class="card">';
-    if(completed.length===0){
+    if(allCompleted.length===0){
       html += '<div class="empty-hint">Completed games will show up here once you end a game from the Live Game tab.</div>';
+    }else if(completed.length===0){
+      html += '<div class="empty-hint">No games match the selected game type filter.</div>';
     }else{
       var byDateDesc = completed.slice().sort(function(a,b){ return (b.endedAt||0)-(a.endedAt||0); });
       byDateDesc.forEach(function(g){
@@ -1607,39 +1878,54 @@
         var open = !!openGameDetail[g.id];
         html += '<div class="game-history-row">';
         html += '<div class="top" data-toggle="'+g.id+'">';
-        html += '<div><div class="opp">vs '+escapeHtml(g.opponent)+'</div><div class="date">'+fmtDate(g.date)+' &middot; '+g.events.length+' events</div></div>';
+        html += '<div><div class="opp">vs '+escapeHtml(g.opponent)+'</div><div class="date">'+fmtDate(g.date)+' &middot; '+escapeHtml(gameTypeLabel(g.gameType))+' &middot; '+g.events.length+' events</div></div>';
         html += '<div class="chev">'+(open?"&#9650;":"&#9660;")+'</div>';
         html += '</div>';
         html += '<div class="detail'+(open?" open":"")+'" id="detail-'+g.id+'">';
         html += buildStatsTable(gTotals, gPlayers, "game_"+g.id);
         html += '<div style="height:8px"></div>';
-        var cloudBtn;
-        if(g.cloudStatus === "uploaded") cloudBtn = '<button class="btn ghost small" disabled style="opacity:0.6;">&#9729; Uploaded</button>';
-        else if(g.cloudStatus === "uploading") cloudBtn = '<button class="btn ghost small" disabled>Uploading&hellip;</button>';
-        else if(g.cloudStatus === "error") cloudBtn = '<button class="btn ghost small" data-uploadgame="'+g.id+'" style="color:var(--danger);">Retry Upload</button>';
-        else cloudBtn = '<button class="btn ghost small" data-uploadgame="'+g.id+'">Upload to Cloud</button>';
-        html += '<div class="row">';
-        html += cloudBtn;
-        html += '<button class="btn ghost small" data-exportgame="'+g.id+'">Export CSV</button>';
-        html += '<button class="btn ghost small" data-delgame="'+g.id+'">'+(g.cloudStatus==="uploaded" ? "Delete Everywhere" : "Delete")+'</button>';
-        html += '</div>';
+        var rowButtons = [];
+        if(canUpload){
+          var cloudBtn;
+          if(g.cloudStatus === "uploaded") cloudBtn = '<button class="btn ghost small" disabled style="opacity:0.6;">&#9729; Uploaded</button>';
+          else if(g.cloudStatus === "uploading") cloudBtn = '<button class="btn ghost small" disabled>Uploading&hellip;</button>';
+          else if(g.cloudStatus === "error") cloudBtn = '<button class="btn ghost small" data-uploadgame="'+g.id+'" style="color:var(--danger);">Retry Upload</button>';
+          else cloudBtn = '<button class="btn ghost small" data-uploadgame="'+g.id+'">Upload to Cloud</button>';
+          rowButtons.push(cloudBtn);
+        }
+        if(canExport) rowButtons.push('<button class="btn ghost small" data-exportgame="'+g.id+'">Export CSV</button>');
+        if(canDeleteGame) rowButtons.push('<button class="btn ghost small" data-delgame="'+g.id+'">'+(g.cloudStatus==="uploaded" ? "Delete Everywhere" : "Delete")+'</button>');
+        if(rowButtons.length){
+          html += '<div class="row">' + rowButtons.join("") + '</div>';
+        }
         html += '</div>';
         html += '</div>';
       });
     }
     html += '</div>';
 
-    html += '<div class="footer-note">Season totals combine every completed game saved on this device.</div>';
+    html += '<div class="footer-note">Season totals combine completed games matching the game type filter above.</div>';
 
     document.getElementById("main").innerHTML = html;
 
-    document.getElementById("exportSeasonBtn").addEventListener("click", function(){
+    var exportSeasonBtn = document.getElementById("exportSeasonBtn");
+    if(exportSeasonBtn) exportSeasonBtn.addEventListener("click", function(){
+      if(!can(getCurrentRole(), "season", "csvExport")){ showToast("You don't have permission to export"); return; }
       if(playerIds.length===0){ showToast("No data to export yet"); return; }
       toCSV(totals, playerIds, "midview-season-totals");
     });
-    document.getElementById("exportEventsBtn").addEventListener("click", function(){
+    var exportEventsBtn = document.getElementById("exportEventsBtn");
+    if(exportEventsBtn) exportEventsBtn.addEventListener("click", function(){
+      if(!can(getCurrentRole(), "season", "csvExport")){ showToast("You don't have permission to export"); return; }
       if(completed.length===0){ showToast("No data to export yet"); return; }
       exportEventsCSV(completed, "midview-game-events");
+    });
+    document.querySelectorAll("[data-typefilter]").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        var key = btn.getAttribute("data-typefilter");
+        gameTypeFilter[key] = !gameTypeFilter[key];
+        renderStats();
+      });
     });
     document.getElementById("refreshCloudBtn").addEventListener("click", function(){
       if(!cloudReady()){ showToast("Cloud not ready yet"); return; }
@@ -1653,6 +1939,7 @@
     document.querySelectorAll("[data-uploadgame]").forEach(function(btn){
       btn.addEventListener("click", function(e){
         e.stopPropagation();
+        if(!can(getCurrentRole(), "season", "uploadToCloud")){ showToast("You don't have permission to upload"); return; }
         var id = btn.getAttribute("data-uploadgame");
         handleUploadGame(id, renderStats);
       });
@@ -1668,6 +1955,7 @@
     document.querySelectorAll("[data-exportgame]").forEach(function(btn){
       btn.addEventListener("click", function(e){
         e.stopPropagation();
+        if(!can(getCurrentRole(), "season", "csvExport")){ showToast("You don't have permission to export"); return; }
         var id = btn.getAttribute("data-exportgame");
         var g = state.games.filter(function(gg){ return gg.id===id; })[0];
         if(!g || g.events.length===0){ showToast("No events to export"); return; }
@@ -1677,6 +1965,7 @@
     document.querySelectorAll("[data-delgame]").forEach(function(btn){
       btn.addEventListener("click", function(e){
         e.stopPropagation();
+        if(!can(getCurrentRole(), "season", "deleteGame")){ showToast("You don't have permission to delete games"); return; }
         var id = btn.getAttribute("data-delgame");
         var g = state.games.filter(function(gg){ return gg.id===id; })[0];
         if(!g) return;
@@ -1714,6 +2003,62 @@
     return !!(window.CloudSync && window.CloudSync.isReady());
   }
 
+  // Merges roster entries that share a name (case-insensitive) but ended up with different
+  // ids — the class of bug that happens if a cloud roster doc gets pulled in with an id that
+  // doesn't match an existing local entry for the same person. Keeps the oldest id as
+  // canonical and remaps every game's playerIds/events so no logged stats get orphaned.
+  function dedupeRoster(){
+    var groups = {};
+    state.roster.forEach(function(p){
+      var key = (p.name || "").trim().toLowerCase();
+      if(!key) return;
+      if(!groups[key]) groups[key] = [];
+      groups[key].push(p);
+    });
+    function idTimestamp(id){
+      var parts = (id || "").split("_");
+      if(parts.length < 2) return Number.MAX_SAFE_INTEGER;
+      var t = parseInt(parts[1], 36);
+      return isNaN(t) ? Number.MAX_SAFE_INTEGER : t;
+    }
+    var idRemap = {};
+    var newRoster = [];
+    Object.keys(groups).forEach(function(key){
+      var group = groups[key];
+      if(group.length === 1){
+        newRoster.push(group[0]);
+        return;
+      }
+      var sorted = group.slice().sort(function(a,b){ return idTimestamp(a.id) - idTimestamp(b.id); });
+      var canonical = sorted[0];
+      newRoster.push({id: canonical.id, name: canonical.name});
+      sorted.slice(1).forEach(function(p){
+        if(p.id !== canonical.id) idRemap[p.id] = canonical.id;
+      });
+    });
+    var remapCount = Object.keys(idRemap).length;
+    if(remapCount === 0) return 0;
+
+    state.games.forEach(function(g){
+      if(g.playerIds){
+        var seen = {};
+        g.playerIds = g.playerIds.map(function(id){ return idRemap[id] || id; }).filter(function(id){
+          if(seen[id]) return false;
+          seen[id] = true;
+          return true;
+        });
+      }
+      if(g.events){
+        g.events.forEach(function(e){
+          if(e.playerId && idRemap[e.playerId]) e.playerId = idRemap[e.playerId];
+        });
+      }
+    });
+    state.roster = newRoster;
+    save();
+    return remapCount;
+  }
+
   function mergeCloudRoster(cloudRoster){
     var changed = false;
     cloudRoster.forEach(function(cp){
@@ -1727,7 +2072,8 @@
       }
     });
     if(changed) save();
-    return changed;
+    var merged = dedupeRoster();
+    return changed || merged>0;
   }
 
   function mergeCloudGames(cloudGames){
@@ -1823,12 +2169,126 @@
     else renderStats();
   }
 
-  // If a game is active on load, jump straight to it
-  if(getActiveGame()) state.activeTab = "game";
-  render();
+  function startAppAfterAuth(){
+    if(getActiveGame()) state.activeTab = "game";
+    render();
+    var dedupedAtLoad = dedupeRoster();
+    if(dedupedAtLoad > 0){
+      render();
+      showToast("Merged " + dedupedAtLoad + " duplicate player" + (dedupedAtLoad===1?"":"s"));
+    }
+  }
+
+  // ---------- Auth gate ----------
+  var authMode = "login";
+  var authGateEl = document.getElementById("authGate");
+  var appEl = document.getElementById("app");
+  var authEmailInput = document.getElementById("authEmail");
+  var authPasswordInput = document.getElementById("authPassword");
+  var authErrorEl = document.getElementById("authError");
+  var authStatusEl = document.getElementById("authStatus");
+  var authSubmitBtn = document.getElementById("authSubmitBtn");
+  var authToggleModeBtn = document.getElementById("authToggleModeBtn");
+
+  function showAuthError(msg){
+    authErrorEl.textContent = msg;
+    authErrorEl.style.display = "block";
+  }
+  function clearAuthError(){
+    authErrorEl.style.display = "none";
+    authErrorEl.textContent = "";
+  }
+  function friendlyAuthError(err){
+    var code = (err && err.code) || "";
+    var msg = (err && err.message) || "";
+    if(msg.indexOf("NOT_INVITED") !== -1) return "This email hasn't been invited yet. Contact your admin.";
+    if(code === "auth/wrong-password" || code === "auth/invalid-credential") return "Incorrect email or password.";
+    if(code === "auth/user-not-found") return "No account found for that email.";
+    if(code === "auth/email-already-in-use") return "An account already exists for that email \u2014 try logging in instead.";
+    if(code === "auth/weak-password") return "Password should be at least 6 characters.";
+    if(code === "auth/invalid-email") return "That doesn't look like a valid email address.";
+    if(code === "auth/too-many-requests") return "Too many attempts \u2014 wait a bit and try again.";
+    return "Something went wrong. Please try again.";
+  }
+  function setAuthMode(mode){
+    authMode = mode;
+    clearAuthError();
+    authStatusEl.textContent = "";
+    if(mode === "signup"){
+      authSubmitBtn.textContent = "Create Account";
+      authToggleModeBtn.textContent = "Already have an account? Log in";
+      authPasswordInput.setAttribute("autocomplete", "new-password");
+    } else {
+      authSubmitBtn.textContent = "Log In";
+      authToggleModeBtn.textContent = "Need an account? Create one";
+      authPasswordInput.setAttribute("autocomplete", "current-password");
+    }
+  }
+  authToggleModeBtn.addEventListener("click", function(){
+    setAuthMode(authMode === "login" ? "signup" : "login");
+  });
+  document.getElementById("authForgotBtn").addEventListener("click", function(){
+    clearAuthError();
+    var email = authEmailInput.value.trim();
+    if(!email){ showAuthError("Enter your email above first, then tap Forgot Password."); return; }
+    if(!window.CloudSync){ showAuthError("Still loading \u2014 try again in a moment."); return; }
+    window.CloudSync.sendPasswordReset(email).then(function(){
+      authStatusEl.textContent = "Password reset email sent \u2014 check your inbox.";
+    }).catch(function(err){
+      showAuthError(friendlyAuthError(err));
+    });
+  });
+  authSubmitBtn.addEventListener("click", function(){
+    clearAuthError();
+    authStatusEl.textContent = "";
+    var email = authEmailInput.value.trim();
+    var password = authPasswordInput.value;
+    if(!email || !password){ showAuthError("Enter both email and password."); return; }
+    if(!window.CloudSync){ showAuthError("Still loading \u2014 try again in a moment."); return; }
+    authSubmitBtn.disabled = true;
+    authStatusEl.textContent = (authMode === "signup") ? "Creating account\u2026" : "Signing in\u2026";
+    var action = (authMode === "signup") ? window.CloudSync.signUp(email, password) : window.CloudSync.signIn(email, password);
+    action.then(function(){
+      authStatusEl.textContent = "";
+    }).catch(function(err){
+      authStatusEl.textContent = "";
+      showAuthError(friendlyAuthError(err));
+    }).finally(function(){
+      authSubmitBtn.disabled = false;
+    });
+  });
+
+  window.addEventListener("cloudsync-authenticated", function(e){
+    var role = e.detail && e.detail.role;
+    if(role){
+      currentAuthRole = role;
+      authGateEl.style.display = "none";
+      appEl.style.display = "";
+      startAppAfterAuth();
+    } else {
+      currentAuthRole = null;
+      appEl.style.display = "none";
+      authGateEl.style.display = "flex";
+      authGateEl.innerHTML = '<div class="auth-card">'
+        + '<div class="auth-brand">MiddieStat</div>'
+        + '<div class="auth-error" style="display:block;">Your account isn\'t set up yet. Contact your admin to get a role assigned, then reload the app.</div>'
+        + '<button class="btn ghost block" id="authSignOutBtn" type="button">Sign Out</button>'
+        + '</div>';
+      document.getElementById("authSignOutBtn").addEventListener("click", function(){
+        window.CloudSync.signOutUser();
+      });
+    }
+  });
+
+  window.addEventListener("cloudsync-signedout", function(){
+    currentAuthRole = null;
+    appEl.style.display = "none";
+    authGateEl.style.display = "flex";
+  });
 })();
 </script>
 <script>
+
   // Registers sw.js (must be uploaded alongside this file) so the app keeps
   // working with no signal after the first successful load. Silently does
   // nothing if service workers aren't supported in this context (e.g. file://).
@@ -1839,10 +2299,7 @@
   }
 </script>
 <script type="module">
-  // ---------- Firebase Cloud Sync ----------
-  // TODO: paste your project's Firebase config below (Firebase console > Project settings
-  // > General > Your apps > SDK setup and configuration). These values are meant to be
-  // public in client-side code — see the build log for why that's safe.
+  // ---------- Firebase Cloud Sync & Auth ----------
   var firebaseConfig = {
     apiKey: "AIzaSyDyevwe3xdaC7JRv_1WrjN5oHq8sZyVC5o",
     authDomain: "middiestat.firebaseapp.com",
@@ -1864,15 +2321,71 @@
     var app = appMod.initializeApp(firebaseConfig);
     var db = fsMod.getFirestore(app);
     var auth = authMod.getAuth(app);
+    var resolvedRole = null;
+
+    function normalizeEmail(email){
+      return (email || "").trim().toLowerCase();
+    }
+
+    // Fetches the signed-in user's profile (created at signup) to determine their role.
+    // Relies on Firestore's own offline cache to keep working without a connection after
+    // the first successful online login on this device.
+    function resolveRole(user){
+      return fsMod.getDoc(fsMod.doc(db, "users", user.uid)).then(function(snap){
+        if(snap.exists()){
+          resolvedRole = snap.data().role || null;
+        } else {
+          resolvedRole = null;
+        }
+        window.dispatchEvent(new CustomEvent("cloudsync-authenticated", {detail: {role: resolvedRole, email: user.email}}));
+      }).catch(function(err){
+        console.error("MiddieStat: failed to resolve role.", err);
+        resolvedRole = null;
+        window.dispatchEvent(new CustomEvent("cloudsync-authenticated", {detail: {role: null, email: user.email}}));
+      });
+    }
 
     authMod.onAuthStateChanged(auth, function(user){
       if(user){
-        window.dispatchEvent(new Event("cloudsync-ready"));
+        resolveRole(user).then(function(){
+          window.dispatchEvent(new Event("cloudsync-ready"));
+        });
+      } else {
+        resolvedRole = null;
+        window.dispatchEvent(new Event("cloudsync-signedout"));
       }
     });
-    authMod.signInAnonymously(auth).catch(function(err){
-      console.error("MiddieStat cloud sync: anonymous sign-in failed.", err);
-    });
+
+    function signIn(email, password){
+      return authMod.signInWithEmailAndPassword(auth, normalizeEmail(email), password);
+    }
+
+    function signUp(email, password){
+      var normEmail = normalizeEmail(email);
+      return fsMod.getDoc(fsMod.doc(db, "invites", normEmail)).then(function(inviteSnap){
+        if(!inviteSnap.exists()){
+          return Promise.reject(new Error("NOT_INVITED"));
+        }
+        var invitedRole = inviteSnap.data().role || "player";
+        return authMod.createUserWithEmailAndPassword(auth, normEmail, password).then(function(cred){
+          return fsMod.setDoc(fsMod.doc(db, "users", cred.user.uid), {
+            email: normEmail,
+            role: invitedRole,
+            createdAt: fsMod.serverTimestamp()
+          }).then(function(){
+            return fsMod.deleteDoc(fsMod.doc(db, "invites", normEmail));
+          });
+        });
+      });
+    }
+
+    function signOutUser(){
+      return authMod.signOut(auth);
+    }
+
+    function sendPasswordReset(email){
+      return authMod.sendPasswordResetEmail(auth, normalizeEmail(email));
+    }
 
     function pushRoster(roster){
       return Promise.all(roster.map(function(p){
@@ -1912,7 +2425,13 @@
     }
 
     window.CloudSync = {
-      isReady: function(){ return !!(auth && auth.currentUser); },
+      isReady: function(){ return !!(auth && auth.currentUser && resolvedRole); },
+      getRole: function(){ return resolvedRole; },
+      getEmail: function(){ return auth && auth.currentUser ? auth.currentUser.email : null; },
+      signIn: signIn,
+      signUp: signUp,
+      signOutUser: signOutUser,
+      sendPasswordReset: sendPasswordReset,
       pushRoster: pushRoster,
       pullRoster: pullRoster,
       uploadGame: uploadGame,
