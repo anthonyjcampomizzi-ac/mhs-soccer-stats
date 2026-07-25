@@ -3,7 +3,7 @@
 // When a new version is deployed, bump CACHE_NAME (e.g. v1 -> v2) so old caches
 // get cleared out automatically for everyone on their next successful online load.
 
-var CACHE_NAME = "midview-tracker-v1";
+var CACHE_NAME = "midview-tracker-v2";
 var APP_SHELL = ["./", "./index.html"];
 
 self.addEventListener("install", function (event) {
@@ -38,6 +38,11 @@ self.addEventListener("activate", function (event) {
 
 self.addEventListener("fetch", function (event) {
   if (event.request.method !== "GET") return;
+  // Only manage same-origin requests (this app's own files). Firebase/Firestore/gstatic
+  // and any other cross-origin calls pass straight through untouched — Firestore's own
+  // SDK handles its offline behavior, and caching its responses here would only confuse it.
+  var url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) return;
   event.respondWith(
     fetch(event.request)
       .then(function (response) {
