@@ -653,6 +653,30 @@
     {key:"tournament", label:"Tournament"},
     {key:"scrimmage", label:"Scrimmage"}
   ];
+  var POSITIONS = [
+    {key:"Goalkeeper", abbr:"GK"},
+    {key:"Defense", abbr:"DEF"},
+    {key:"Midfield", abbr:"MID"},
+    {key:"Forward", abbr:"FWD"}
+  ];
+  var YEARS = [
+    {key:"Freshman", abbr:"Fr"},
+    {key:"Sophomore", abbr:"So"},
+    {key:"Junior", abbr:"Jr"},
+    {key:"Senior", abbr:"Sr"}
+  ];
+  var SQUADS = [
+    {key:"Varsity"},
+    {key:"JV"}
+  ];
+  function positionAbbr(position){
+    var p = POSITIONS.filter(function(x){ return x.key===position; })[0];
+    return p ? p.abbr : "";
+  }
+  function yearAbbr(year){
+    var y = YEARS.filter(function(x){ return x.key===year; })[0];
+    return y ? y.abbr : "";
+  }
   function standardPeriodPlan(){
     return [
       {key:"reg1", label:"1st Half", durationSec:2400},
@@ -772,6 +796,14 @@
     crossesClaimed:"Who claimed the cross?"
   };
 
+  function lastNameOf(fullName){
+    var parts = (fullName || "").trim().split(/\s+/);
+    return parts[parts.length - 1] || "";
+  }
+  function byLastName(nameA, nameB){
+    return lastNameOf(nameA).toLowerCase().localeCompare(lastNameOf(nameB).toLowerCase());
+  }
+
   function seasonTotals(){ return aggregate(state.games); }
   function sortedPlayerIds(g, statKey, excludeId){
     var totals = seasonTotals();
@@ -779,7 +811,7 @@
       var ta = (totals[a] && totals[a][statKey]) || 0;
       var tb = (totals[b] && totals[b][statKey]) || 0;
       if(tb!==ta) return tb-ta;
-      return playerName(a).localeCompare(playerName(b));
+      return byLastName(playerName(a), playerName(b));
     });
   }
 
@@ -817,6 +849,7 @@
   var state = loadState();
   save();
   var openGameDetail = {};
+  var openRosterEdit = {};
 
   function loadState(){
     try{
@@ -955,10 +988,57 @@
     if(state.roster.length===0){
       html += '<div class="empty-hint">No players yet. Paste names above to get started &mdash; you can also drop in a CSV list later.</div>';
     }else{
-      state.roster.forEach(function(p){
-        html += '<div class="roster-item">';
-        html += '<span class="name">' + escapeHtml(p.name) + '</span>';
+      var sortedRoster = state.roster.slice().sort(function(a,b){ return byLastName(a.name, b.name); });
+      sortedRoster.forEach(function(p){
+        var metaParts = [];
+        if(p.number) metaParts.push("#" + p.number);
+        if(p.position) metaParts.push(positionAbbr(p.position));
+        if(p.squad) metaParts.push(p.squad);
+        if(p.year) metaParts.push(yearAbbr(p.year));
+        var metaLine = metaParts.join(" &middot; ");
+        var editing = !!openRosterEdit[p.id];
+
+        html += '<div class="roster-item" style="flex-direction:column; align-items:stretch;">';
+        html += '<div style="display:flex; align-items:center; justify-content:space-between;">';
+        html += '<div><span class="name">' + escapeHtml(p.name) + '</span>';
+        if(metaLine) html += '<div style="font-size:11.5px; color:var(--dim); margin-top:2px;">'+metaLine+'</div>';
+        html += '</div>';
+        html += '<div style="display:flex; gap:4px; flex-shrink:0;">';
+        if(canAdd) html += '<button class="rm" data-edit-player="'+p.id+'">'+(editing?"&#9650;":"&#9998;")+'</button>';
         if(canDelete) html += '<button class="rm" data-rm="'+p.id+'">&#10005;</button>';
+        html += '</div>';
+        html += '</div>';
+
+        if(editing){
+          html += '<div style="margin-top:10px; padding-top:10px; border-top:1px solid var(--line);">';
+          html += '<div class="row"><div>';
+          html += '<label class="field-label">Number</label>';
+          html += '<input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" id="editNumber-'+p.id+'" value="'+escapeHtml(p.number||"")+'" placeholder="e.g. 7">';
+          html += '</div><div>';
+          html += '<label class="field-label">Squad</label>';
+          html += '<select id="editSquad-'+p.id+'">';
+          html += '<option value="">&mdash;</option>';
+          SQUADS.forEach(function(s){ html += '<option value="'+s.key+'"'+(p.squad===s.key?" selected":"")+'>'+s.key+'</option>'; });
+          html += '</select>';
+          html += '</div></div>';
+          html += '<div style="height:10px"></div>';
+          html += '<div class="row"><div>';
+          html += '<label class="field-label">Position</label>';
+          html += '<select id="editPosition-'+p.id+'">';
+          html += '<option value="">&mdash;</option>';
+          POSITIONS.forEach(function(pos){ html += '<option value="'+pos.key+'"'+(p.position===pos.key?" selected":"")+'>'+pos.key+' ('+pos.abbr+')</option>'; });
+          html += '</select>';
+          html += '</div><div>';
+          html += '<label class="field-label">Year</label>';
+          html += '<select id="editYear-'+p.id+'">';
+          html += '<option value="">&mdash;</option>';
+          YEARS.forEach(function(y){ html += '<option value="'+y.key+'"'+(p.year===y.key?" selected":"")+'>'+y.key+' ('+y.abbr+')</option>'; });
+          html += '</select>';
+          html += '</div></div>';
+          html += '<div style="height:12px"></div>';
+          html += '<button class="btn small" data-save-player="'+p.id+'">Save</button>';
+          html += '</div>';
+        }
         html += '</div>';
       });
     }
@@ -1025,6 +1105,37 @@
         }).catch(function(err){
           showToast("Couldn't remove \u2014 try again");
         });
+      });
+    });
+
+    document.querySelectorAll("[data-edit-player]").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        var id = btn.getAttribute("data-edit-player");
+        openRosterEdit[id] = !openRosterEdit[id];
+        renderRoster();
+      });
+    });
+
+    document.querySelectorAll("[data-save-player]").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        if(!can(getCurrentRole(), "roster", "addPlayer")){ showToast("You don't have permission to edit players"); return; }
+        var id = btn.getAttribute("data-save-player");
+        var p = state.roster.filter(function(pp){ return pp.id===id; })[0];
+        if(!p) return;
+        var numberVal = document.getElementById("editNumber-"+id).value.trim();
+        if(numberVal && !/^[0-9]{1,2}$/.test(numberVal)){
+          showToast("Number must be 1 or 2 digits");
+          return;
+        }
+        p.number = numberVal;
+        p.squad = document.getElementById("editSquad-"+id).value;
+        p.position = document.getElementById("editPosition-"+id).value;
+        p.year = document.getElementById("editYear-"+id).value;
+        save();
+        openRosterEdit[id] = false;
+        renderRoster();
+        showToast("Player updated");
+        tryPushRoster();
       });
     });
 
@@ -1595,7 +1706,7 @@
 
     html += '<h2 class="section-title">Players in this game</h2>';
     html += '<div class="card">';
-    state.roster.forEach(function(p){
+    state.roster.slice().sort(function(a,b){ return byLastName(a.name, b.name); }).forEach(function(p){
       html += '<div class="pick-row">';
       html += '<span class="name">'+escapeHtml(p.name)+'</span>';
       html += '<button class="toggle on" data-pick="'+p.id+'"></button>';
@@ -2039,7 +2150,15 @@
       }
       var sorted = group.slice().sort(function(a,b){ return idTimestamp(a.id) - idTimestamp(b.id); });
       var canonical = sorted[0];
-      newRoster.push({id: canonical.id, name: canonical.name});
+      var merged = {id: canonical.id, name: canonical.name};
+      ["number", "position", "year", "squad"].forEach(function(f){
+        var val = "";
+        for(var i=0;i<sorted.length;i++){
+          if(sorted[i][f]){ val = sorted[i][f]; break; }
+        }
+        merged[f] = val;
+      });
+      newRoster.push(merged);
       sorted.slice(1).forEach(function(p){
         if(p.id !== canonical.id) idRemap[p.id] = canonical.id;
       });
@@ -2069,14 +2188,23 @@
 
   function mergeCloudRoster(cloudRoster){
     var changed = false;
+    var fields = ["name", "number", "position", "year", "squad"];
     cloudRoster.forEach(function(cp){
       var existing = state.roster.filter(function(p){ return p.id===cp.id; })[0];
       if(!existing){
-        state.roster.push({id: cp.id, name: cp.name});
+        state.roster.push({
+          id: cp.id, name: cp.name,
+          number: cp.number || "", position: cp.position || "", year: cp.year || "", squad: cp.squad || ""
+        });
         changed = true;
-      } else if(existing.name !== cp.name){
-        existing.name = cp.name;
-        changed = true;
+      } else {
+        fields.forEach(function(f){
+          var cv = cp[f] || "";
+          if((existing[f] || "") !== cv){
+            existing[f] = cv;
+            changed = true;
+          }
+        });
       }
     });
     if(changed) save();
@@ -2399,6 +2527,10 @@
       return Promise.all(roster.map(function(p){
         return fsMod.setDoc(fsMod.doc(db, "roster", p.id), {
           name: p.name,
+          number: p.number || "",
+          position: p.position || "",
+          year: p.year || "",
+          squad: p.squad || "",
           updatedAt: fsMod.serverTimestamp()
         });
       }));
@@ -2407,7 +2539,17 @@
     function pullRoster(){
       return fsMod.getDocs(fsMod.collection(db, "roster")).then(function(snap){
         var out = [];
-        snap.forEach(function(d){ out.push({id: d.id, name: d.data().name}); });
+        snap.forEach(function(d){
+          var data = d.data();
+          out.push({
+            id: d.id,
+            name: data.name,
+            number: data.number || "",
+            position: data.position || "",
+            year: data.year || "",
+            squad: data.squad || ""
+          });
+        });
         return out;
       });
     }
