@@ -1169,6 +1169,140 @@
     return (stoppage ? "+" : "") + fmtClock(Math.abs(remainingSec));
   }
 
+  // ---------- Sample Game Generator (testing tool) ----------
+  // Temporary dev utility — generates a full, realistic scrimmage for a specific starting
+  // lineup so the app's stats/reporting views have real-looking data to test against.
+  var SAMPLE_LINEUP = [
+    "Hannah Bacskay", "Audrey Gerber", "Haiden Bacskay",
+    "Cadence Dellisanti", "Harper Dellisanti", "Kailey Gill", "Alexa Baker",
+    "Cora Vance", "Adriana Loera", "Miranda Lengyel",
+    "Molly Ockuly"
+  ];
+  var SAMPLE_HALF1_ACTIONS = [
+    {type:"shot", player:"Kailey Gill", onTarget:false},
+    {type:"shot", player:"Cadence Dellisanti", onTarget:true},
+    {type:"tackle", player:"Cora Vance"},
+    {type:"tackle", player:"Miranda Lengyel"},
+    {type:"shot", player:"Hannah Bacskay", onTarget:false},
+    {type:"goal", player:"Hannah Bacskay", assist:"Haiden Bacskay"},
+    {type:"clearance", player:"Adriana Loera"},
+    {type:"tackle", player:"Harper Dellisanti"},
+    {type:"goalAllowed", player:"Molly Ockuly"},
+    {type:"save", player:"Molly Ockuly"},
+    {type:"block", player:"Cora Vance"},
+    {type:"tackle", player:"Adriana Loera"},
+    {type:"clearance", player:"Miranda Lengyel"},
+    {type:"tackle", player:"Cora Vance"},
+    {type:"clearance", player:"Cora Vance"},
+    {type:"tackle", player:"Cadence Dellisanti"}
+  ];
+  var SAMPLE_HALF2_ACTIONS = [
+    {type:"crossClaimed", player:"Molly Ockuly"},
+    {type:"shot", player:"Haiden Bacskay", onTarget:true},
+    {type:"tackle", player:"Alexa Baker"},
+    {type:"goal", player:"Hannah Bacskay", assist:"Audrey Gerber"},
+    {type:"shot", player:"Haiden Bacskay", onTarget:false},
+    {type:"tackle", player:"Miranda Lengyel"},
+    {type:"clearance", player:"Cora Vance"},
+    {type:"block", player:"Adriana Loera"},
+    {type:"tackle", player:"Cora Vance"},
+    {type:"goal", player:"Audrey Gerber", assist:null},
+    {type:"shot", player:"Audrey Gerber", onTarget:false},
+    {type:"clearance", player:"Adriana Loera"},
+    {type:"tackle", player:"Adriana Loera"},
+    {type:"clearance", player:"Miranda Lengyel"},
+    {type:"block", player:"Miranda Lengyel"},
+    {type:"tackle", player:"Cadence Dellisanti"},
+    {type:"block", player:"Harper Dellisanti"},
+    {type:"tackle", player:"Harper Dellisanti"},
+    {type:"tackle", player:"Alexa Baker"},
+    {type:"save", player:"Molly Ockuly"},
+    {type:"clearance", player:"Cora Vance"},
+    {type:"tackle", player:"Kailey Gill"},
+    {type:"tackle", player:"Cora Vance"},
+    {type:"crossClaimed", player:"Molly Ockuly"},
+    {type:"shot", player:"Hannah Bacskay", onTarget:true},
+    {type:"tackle", player:"Cora Vance"},
+    {type:"tackle", player:"Miranda Lengyel"},
+    {type:"tackle", player:"Adriana Loera"},
+    {type:"block", player:"Cora Vance"},
+    {type:"clearance", player:"Cora Vance"},
+    {type:"clearance", player:"Adriana Loera"},
+    {type:"clearance", player:"Miranda Lengyel"}
+  ];
+  var SAMPLE_STAT_FOR_TYPE = {
+    tackle:"tackles", block:"blocks", clearance:"clearances",
+    save:"saves", goalAllowed:"goalsAllowed", crossClaimed:"crossesClaimed"
+  };
+  function buildSampleGameEvents(idOf){
+    var events = [];
+    function push(playerName, stat, half, clockSec){
+      events.push({
+        id: uid("e"),
+        playerId: idOf(playerName),
+        stat: stat,
+        ts: Date.now() + events.length,
+        clockSec: clockSec,
+        period: half===1 ? "1st Half" : "2nd Half"
+      });
+    }
+    function processHalf(actions, half){
+      var n = actions.length;
+      actions.forEach(function(a, i){
+        var clockSec = Math.round((i+1) * 2400 / (n+1));
+        if(a.type === "goal"){
+          push(a.player, "goals", half, clockSec);
+          push(a.player, "shots", half, clockSec);
+          push(a.player, "shotsOnTarget", half, clockSec);
+          if(a.assist) push(a.assist, "assists", half, clockSec);
+        } else if(a.type === "shot"){
+          push(a.player, "shots", half, clockSec);
+          if(a.onTarget) push(a.player, "shotsOnTarget", half, clockSec);
+        } else {
+          push(a.player, SAMPLE_STAT_FOR_TYPE[a.type], half, clockSec);
+        }
+      });
+    }
+    processHalf(SAMPLE_HALF1_ACTIONS, 1);
+    processHalf(SAMPLE_HALF2_ACTIONS, 2);
+    return events;
+  }
+  function generateSampleGame(){
+    if(getCurrentRole() !== "admin"){ showToast("Only admins can generate sample games"); return; }
+    var byName = {};
+    state.roster.forEach(function(p){ byName[p.name.trim().toLowerCase()] = p.id; });
+    var missing = SAMPLE_LINEUP.filter(function(n){ return !byName[n.toLowerCase()]; });
+    if(missing.length){
+      showToast("Roster is missing: " + missing.join(", "));
+      return;
+    }
+    function idOf(name){ return byName[name.trim().toLowerCase()]; }
+    var g = {
+      id: uid("g"),
+      opponent: "Sample Opponent (Test Data)",
+      date: todayStr(),
+      playerIds: SAMPLE_LINEUP.map(idOf),
+      events: buildSampleGameEvents(idOf),
+      gameType: "scrimmage",
+      periodPlan: standardPeriodPlan(),
+      periodKey: "reg2",
+      periodElapsedSec: 2400,
+      running: false,
+      runStartedAt: null,
+      isTournament: false,
+      awaitingDecision: null,
+      status: "completed",
+      cloudStatus: "local",
+      createdAt: Date.now(),
+      endedAt: Date.now()
+    };
+    state.games.push(g);
+    state.activeTab = "stats";
+    save();
+    showToast("Sample game generated \u2014 3\u20131");
+    render();
+  }
+
   function finishGame(g, resultNote){
     g.running = false;
     g.periodElapsedSec = computePeriodElapsed(g);
@@ -1715,6 +1849,10 @@
     html += '</div>';
 
     html += '<button class="btn block" id="startGameBtn">Start Game</button>';
+    if(getCurrentRole() === "admin"){
+      html += '<div style="height:10px"></div>';
+      html += '<button class="btn ghost small" id="generateSampleBtn" type="button" style="width:100%; color:var(--dim);">Generate Sample Game (Test Data)</button>';
+    }
 
     document.getElementById("main").innerHTML = html;
 
@@ -1794,6 +1932,11 @@
       state.shootoutKickerId = null;
       save();
       renderGame();
+    });
+
+    var generateSampleBtn = document.getElementById("generateSampleBtn");
+    if(generateSampleBtn) generateSampleBtn.addEventListener("click", function(){
+      generateSampleGame();
     });
   }
 
