@@ -532,6 +532,46 @@
     color:var(--dim);
     margin-top:14px;
   }
+
+  .gs-preview-overlay{
+    position:fixed;
+    inset:0;
+    background:rgba(0,0,0,0.8);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    padding:20px;
+    padding-top:calc(20px + var(--safe-t));
+    padding-bottom:calc(20px + var(--safe-b));
+    z-index:200;
+  }
+  .gs-preview-card{
+    width:100%;
+    max-width:440px;
+    background:var(--panel);
+    border-radius:16px;
+    padding:16px;
+    max-height:95vh;
+    overflow-y:auto;
+  }
+  .gs-preview-card img{
+    width:100%;
+    height:auto;
+    border-radius:10px;
+    display:block;
+  }
+  .gs-preview-hint{
+    text-align:center;
+    font-size:12px;
+    color:var(--dim);
+    margin-top:12px;
+  }
+  .gs-preview-actions{
+    display:flex;
+    gap:10px;
+    margin-top:14px;
+  }
+  .gs-preview-actions > *{flex:1;}
 </style>
 </head>
 <body>
@@ -574,6 +614,16 @@
   </nav>
 </div>
 <div class="toast" id="toast"></div>
+<div id="gsPreviewOverlay" class="gs-preview-overlay" style="display:none;">
+  <div class="gs-preview-card">
+    <img id="gsPreviewImg" src="" alt="Game summary preview">
+    <div class="gs-preview-hint">Press and hold the image to save it directly to Photos</div>
+    <div class="gs-preview-actions">
+      <button id="gsDownloadBtn" class="btn block">Download</button>
+      <button id="gsCloseBtn" class="btn ghost block">Close</button>
+    </div>
+  </div>
+</div>
 
 <script>
 (function(){
@@ -2046,6 +2096,36 @@
     svg += '<rect x="3" y="3" width="'+(W-6)+'" height="'+(H-6)+'" fill="none" stroke="'+BLACK+'" stroke-width="6"/></svg>';
     return svg;
   }
+  var gsPreviewBlobUrl = null;
+  var gsPreviewFilename = null;
+
+  function gsShowPreview(blob, filename){
+    gsClosePreview(); // clean up any prior preview URL first
+    gsPreviewBlobUrl = URL.createObjectURL(blob);
+    gsPreviewFilename = filename;
+    document.getElementById("gsPreviewImg").src = gsPreviewBlobUrl;
+    document.getElementById("gsPreviewOverlay").style.display = "flex";
+  }
+  function gsClosePreview(){
+    document.getElementById("gsPreviewOverlay").style.display = "none";
+    document.getElementById("gsPreviewImg").src = "";
+    if(gsPreviewBlobUrl){
+      URL.revokeObjectURL(gsPreviewBlobUrl);
+      gsPreviewBlobUrl = null;
+    }
+    gsPreviewFilename = null;
+  }
+  document.getElementById("gsCloseBtn").addEventListener("click", gsClosePreview);
+  document.getElementById("gsDownloadBtn").addEventListener("click", function(){
+    if(!gsPreviewBlobUrl) return;
+    var a = document.createElement("a");
+    a.href = gsPreviewBlobUrl;
+    a.download = gsPreviewFilename || "midview-game-summary.png";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  });
+
   function generateGameSummaryImage(gameId){
     if(!can(getCurrentRole(), "gameSummary", "generate")){ showToast("You don't have permission to generate this"); return; }
     var g = state.games.filter(function(gg){ return gg.id===gameId; })[0];
@@ -2064,14 +2144,8 @@
       URL.revokeObjectURL(url);
       canvas.toBlob(function(blob){
         if(!blob){ showToast("Couldn't generate the image \u2014 try again"); return; }
-        var dlUrl = URL.createObjectURL(blob);
-        var a = document.createElement("a");
-        a.href = dlUrl;
-        a.download = "midview-vs-" + (g.opponent||"opponent").replace(/[^a-z0-9]+/gi,"-").toLowerCase() + "-" + g.date + ".png";
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(function(){ URL.revokeObjectURL(dlUrl); }, 2000);
+        var filename = "midview-vs-" + (g.opponent||"opponent").replace(/[^a-z0-9]+/gi,"-").toLowerCase() + "-" + g.date + ".png";
+        gsShowPreview(blob, filename);
       }, "image/png");
     };
     img.onerror = function(){
