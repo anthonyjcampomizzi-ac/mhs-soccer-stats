@@ -616,7 +616,7 @@
 <div class="toast" id="toast"></div>
 <div id="gsPreviewOverlay" class="gs-preview-overlay" style="display:none;">
   <div class="gs-preview-card">
-    <img id="gsPreviewImg" src="" alt="Game summary preview">
+    <img id="gsPreviewImg" src="" alt="Generated image preview">
     <div class="gs-preview-hint">Press and hold the image to save it directly to Photos</div>
     <div class="gs-preview-actions">
       <button id="gsDownloadBtn" class="btn block">Download</button>
@@ -768,7 +768,7 @@
 
   // One entry per module.function from the role matrix. Modules marked "not yet built"
   // have no UI to attach to today — the config exists so that whoever builds Coaching
-  // Reports / Game Summary / Player Cards / Season Summary can call can() immediately
+  // Reports / Player Cards / Season Summary can call can() immediately
   // rather than inventing a permission scheme at that point.
   var PERMISSIONS = {
     roster: {
@@ -783,10 +783,16 @@
       csvExport: ["admin"],
       uploadToCloud: ["admin", "tracker"]
     },
-    gameSummary: {
+    gameSnapshot: {
       // "view" collapsed into "generate" -- the graphic is produced on demand and
       // downloaded immediately, there's nothing separate stored for anyone to view
       // independently, so a distinct view permission wouldn't gate anything real.
+      generate: ["admin", "coach"],
+      export: ["admin", "coach"]
+    },
+    gameReport: {
+      // Same reasoning and same permissions as gameSnapshot -- produced on demand,
+      // nothing persisted separately to view.
       generate: ["admin", "coach"],
       export: ["admin", "coach"]
     },
@@ -1937,7 +1943,7 @@
   }
 
 
-  // ---------- Game Summary Generator ----------
+  // ---------- Game Snapshot Generator ----------
   // Produces a 1080x1080 branded PNG for social media (Instagram/Facebook) summarizing
   // a completed game: final score, goals, assists, saves, and Middie of the Match.
   // Built as SVG then rasterized via canvas -- no external libraries, works fully offline.
@@ -1954,16 +1960,23 @@
   function gsFullHexGrid(x0,y0,x1,y1,r,gradId,edgeStroke,edgeOpacity,fillOpacity){
     var w = r*Math.sqrt(3), h = r*1.5;
     var polys = [];
-    var row = 0, y = y0 - r;
+    // Row phase is anchored to a shared global origin (y=0), not this call's own y0 --
+    // this call only WINDOWS into a slice of one continuous infinite grid. That's what
+    // keeps the blue-zone and silver-zone grids (drawn as two separately-clipped calls)
+    // perfectly aligned with each other at the diagonal seam between them, rather than
+    // each being its own independently-phased grid that happens to sit near the other.
+    var row = Math.floor((y0 - r) / h);
+    var y = row * h;
     while(y - r <= y1){
-      var xOffset = (row % 2 === 1) ? w/2 : 0;
+      var parity = ((row % 2) + 2) % 2; // normalize JS modulo for negative row indices
+      var xOffset = parity === 1 ? w/2 : 0;
       var x = x0 - w + xOffset;
       while(x - w/2 <= x1){
         polys.push('<polygon points="'+gsHexPoints(x,y,r)+'" fill="url(#'+gradId+')" fill-opacity="'+fillOpacity+'" stroke="'+edgeStroke+'" stroke-width="1.5" stroke-opacity="'+edgeOpacity+'"/>');
         x += w;
       }
-      y += h;
       row++;
+      y = row * h;
     }
     return polys.join("");
   }
@@ -2027,7 +2040,7 @@
       theirScore: score.their
     };
   }
-  function buildGameSummarySVG(g){
+  function buildGameSnapshotSVG(g){
     var W = 1080, H = 1080;
     var BLUE="#1a4fa8", BLUE_DARK="#0d2f6b", BLUE_LIGHT_EDGE="#3f6bc4";
     var SILVER="#c8d0d8", WHITE="#ffffff", INK="#0a0d12", GOLD="#e0a92f", BLACK="#000000";
@@ -2126,12 +2139,12 @@
     document.body.removeChild(a);
   });
 
-  function generateGameSummaryImage(gameId){
-    if(!can(getCurrentRole(), "gameSummary", "generate")){ showToast("You don't have permission to generate this"); return; }
+  function generateGameSnapshotImage(gameId){
+    if(!can(getCurrentRole(), "gameSnapshot", "generate")){ showToast("You don't have permission to generate this"); return; }
     var g = state.games.filter(function(gg){ return gg.id===gameId; })[0];
     if(!g) return;
     showToast("Generating image\u2026");
-    var svgStr = buildGameSummarySVG(g);
+    var svgStr = buildGameSnapshotSVG(g);
     var svgBlob = new Blob([svgStr], {type: "image/svg+xml;charset=utf-8"});
     var url = URL.createObjectURL(svgBlob);
     var img = new Image();
@@ -2144,12 +2157,274 @@
       URL.revokeObjectURL(url);
       canvas.toBlob(function(blob){
         if(!blob){ showToast("Couldn't generate the image \u2014 try again"); return; }
-        var filename = "midview-vs-" + (g.opponent||"opponent").replace(/[^a-z0-9]+/gi,"-").toLowerCase() + "-" + g.date + ".png";
+        var filename = "midview-snapshot-vs-" + (g.opponent||"opponent").replace(/[^a-z0-9]+/gi,"-").toLowerCase() + "-" + g.date + ".png";
         gsShowPreview(blob, filename);
       }, "image/png");
     };
     img.onerror = function(){
       showToast("Couldn't generate the image \u2014 try again");
+      URL.revokeObjectURL(url);
+    };
+    img.src = url;
+  }
+
+
+  // ---------- Game Report Generator ----------
+  // A taller, letterhead-style document: box score timeline (goals with assists,
+  // halftime/full-time markers) plus three player-stat tables (Attacking/Defending/
+  // Goalkeeping), each filtered to players with any event in that group and sorted by
+  // BPS descending. Reuses the hex-grid/elevated-card helpers built for Game Snapshot.
+  var GR_BLUE = "#1a4fa8", GR_BLUE_DARK = "#0d2f6b", GR_BLUE_LIGHT_EDGE = "#3f6bc4";
+  var GR_SILVER = "#c8d0d8", GR_INK = "#0a0d12", GR_DIM = "#5b6472";
+  var GR_WHITE = "#ffffff", GR_LINE = "#d8dee6", GR_BAND = "#eef1f5";
+
+  function grMinuteOffsets(g){
+    // Maps each period's LABEL (as stored on events) to its starting minute offset,
+    // walking g.periodPlan in order, then appending Extra Time labels if this game
+    // actually has events there.
+    var offsets = {};
+    var acc = 0;
+    (g.periodPlan || []).forEach(function(p){
+      offsets[p.label] = acc;
+      acc += p.durationSec / 60;
+    });
+    ["et1", "et2"].forEach(function(key){
+      var label = periodLabel(g, key);
+      if(offsets[label] === undefined){
+        offsets[label] = acc;
+        acc += FIXED_PERIOD_DURATIONS[key] / 60;
+      }
+    });
+    return offsets;
+  }
+  function grEventMinute(g, e, offsets){
+    var base = offsets[e.period] !== undefined ? offsets[e.period] : 0;
+    return Math.floor(base + (e.clockSec || 0) / 60) + 1;
+  }
+  function grBuildTimeline(g){
+    var offsets = grMinuteOffsets(g);
+    var goalEvents = g.events.filter(function(e){ return e.stat === "goals" || e.stat === "goalsAllowed"; })
+      .slice().sort(function(a,b){ return a.ts - b.ts; });
+    var ourScore = 0, theirScore = 0;
+    var timeline = [];
+    var periodLabels = (g.periodPlan || []).map(function(p){ return p.label; });
+    var seenPeriods = [];
+    goalEvents.forEach(function(e){
+      // Insert a HALFTIME-style marker whenever we cross into a new period for the
+      // first time, as long as it's not the very first period of the game.
+      if(seenPeriods.indexOf(e.period) === -1){
+        if(seenPeriods.length > 0){
+          var justFinishedIdx = periodLabels.indexOf(seenPeriods[seenPeriods.length-1]);
+          var label = (justFinishedIdx === 0 && periodLabels.length > 1) ? "HALFTIME" : (seenPeriods[seenPeriods.length-1].toUpperCase() + " END");
+          timeline.push({type:"period", label:label, score: ourScore+"\u2013"+theirScore});
+        }
+        seenPeriods.push(e.period);
+      }
+      if(e.stat === "goals"){
+        ourScore++;
+        var assist = g.events.filter(function(a){ return a.stat==="assists" && a.ts===e.ts; })[0];
+        timeline.push({
+          type:"goal", minute: grEventMinute(g,e,offsets),
+          scorer: playerName(e.playerId), assist: assist ? playerName(assist.playerId) : null,
+          us: true, score: ourScore+"\u2013"+theirScore
+        });
+      } else {
+        theirScore++;
+        timeline.push({
+          type:"goal", minute: grEventMinute(g,e,offsets),
+          scorer: g.opponent || "Opponent", assist: null,
+          us: false, score: ourScore+"\u2013"+theirScore
+        });
+      }
+    });
+    timeline.push({type:"period", label:"FULL TIME", score: ourScore+"\u2013"+theirScore});
+    return timeline;
+  }
+  function grStatRows(g, statKeys, minStat){
+    var totals = aggregate([g]);
+    var ids = g.playerIds.filter(function(pid){
+      var t = totals[pid];
+      if(!t) return false;
+      return statKeys.some(function(k){ return (t[k]||0) > 0; });
+    });
+    ids.sort(function(a,b){
+      var diff = computeBPS(totals,b) - computeBPS(totals,a);
+      if(diff !== 0) return diff;
+      return byLastName(playerName(a), playerName(b));
+    });
+    return ids.map(function(pid){
+      var t = totals[pid] || {};
+      var row = [playerName(pid)];
+      statKeys.forEach(function(k){ row.push(t[k] || 0); });
+      return row;
+    });
+  }
+  function grSaveEntries(g){
+    var totals = aggregate([g]);
+    return g.playerIds.filter(function(pid){ return totals[pid] && totals[pid].saves; })
+      .sort(function(a,b){ return (totals[b].saves||0) - (totals[a].saves||0); })
+      .map(function(pid){ return {name: playerName(pid), count: totals[pid].saves}; });
+  }
+  function grTable(x, y, w, headers, statCenters, rows, title){
+    var parts = [];
+    var rowH = 42, headerH = 48, titleH = 34;
+    parts.push('<text x="'+x+'" y="'+(y+22)+'" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="20" letter-spacing="2" fill="'+GR_BLUE+'">'+escapeHtml(title)+'</text>');
+    var ty = y + titleH;
+    parts.push('<rect x="'+x+'" y="'+ty+'" width="'+w+'" height="'+headerH+'" fill="'+GR_BLUE_DARK+'"/>');
+    var positions = [x+16].concat(statCenters);
+    headers.forEach(function(htext, i){
+      var anchor = i===0 ? "start" : "middle";
+      var tx = positions[i];
+      var lines = Array.isArray(htext) ? htext : [htext];
+      var lineY = ty + headerH/2 - (lines.length-1)*9 + 5;
+      lines.forEach(function(line){
+        parts.push('<text x="'+tx+'" y="'+lineY+'" text-anchor="'+anchor+'" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="14" letter-spacing="0.5" fill="'+GR_WHITE+'">'+escapeHtml(line)+'</text>');
+        lineY += 18;
+      });
+    });
+    var ry = ty + headerH;
+    if(rows.length === 0){
+      parts.push('<rect x="'+x+'" y="'+ry+'" width="'+w+'" height="'+rowH+'" fill="'+GR_WHITE+'"/>');
+      parts.push('<text x="'+(x+16)+'" y="'+(ry+27)+'" font-family="Arial, Helvetica, sans-serif" font-weight="400" font-style="italic" font-size="16" fill="'+GR_DIM+'">No events recorded</text>');
+      ry += rowH;
+    } else {
+      rows.forEach(function(row, ri){
+        var bg = ri % 2 === 0 ? GR_WHITE : "#f4f6f9";
+        parts.push('<rect x="'+x+'" y="'+ry+'" width="'+w+'" height="'+rowH+'" fill="'+bg+'"/>');
+        row.forEach(function(val, i){
+          var anchor = i===0 ? "start" : "middle";
+          var tx = positions[i];
+          var weight = i===0 ? "700" : "400";
+          parts.push('<text x="'+tx+'" y="'+(ry+27)+'" text-anchor="'+anchor+'" font-family="Arial, Helvetica, sans-serif" font-weight="'+weight+'" font-size="17" fill="'+GR_INK+'">'+escapeHtml(String(val))+'</text>');
+        });
+        ry += rowH;
+      });
+    }
+    parts.push('<rect x="'+x+'" y="'+ty+'" width="'+w+'" height="'+(headerH + rowH*Math.max(rows.length,1))+'" fill="none" stroke="'+GR_LINE+'" stroke-width="1.5"/>');
+    return {svg: parts.join(""), height: titleH + headerH + rowH*Math.max(rows.length,1)};
+  }
+  function grStatColCenters(n, firstX, lastX){
+    if(n === 1) return [(firstX+lastX)/2];
+    var out = [];
+    for(var i=0;i<n;i++) out.push(firstX + i*(lastX-firstX)/(n-1));
+    return out;
+  }
+  function buildGameReportSVG(g){
+    var W = 1080;
+    var mhsLogoSrc = "data:image/png;base64," + MHS_LOGO_B64;
+    var engLogoEl = document.querySelector(".brand-logo");
+    var engLogoSrc = engLogoEl ? engLogoEl.getAttribute("src") : "";
+
+    var opponent = (g.opponent || "Opponent").toUpperCase();
+    var dateText = gsFmtDate(g.date);
+    var gameTypeText = gameTypeLabel(g.gameType).toUpperCase();
+    var timeline = grBuildTimeline(g);
+    var saveEntries = grSaveEntries(g);
+
+    var PLAYER_COL_WIDTH = 370;
+    var STAT_AREA_X0 = 80 + PLAYER_COL_WIDTH;
+    var STAT_AREA_X1 = 80 + 920;
+    var slot = (STAT_AREA_X1 - STAT_AREA_X0) / 4;
+    var FIRST_COL_X = STAT_AREA_X0 + slot/2;
+    var LAST_COL_X = STAT_AREA_X1 - slot/2;
+
+    var attackHeaders = ["PLAYER","GOALS","ASSISTS","SHOTS",["SHOTS ON","TARGET"]];
+    var defendHeaders = ["PLAYER","BLOCKS","CLEARANCES","TACKLES"];
+    var gkHeaders = ["PLAYER","SAVES",["GOALS","ALLOWED"],["CROSSES","CLAIMED"]];
+    var attackRows = grStatRows(g, ["goals","assists","shots","shotsOnTarget"]);
+    var defendRows = grStatRows(g, ["blocks","clearances","tackles"]);
+    var gkRows = grStatRows(g, ["saves","goalsAllowed","crossesClaimed"]);
+
+    var LETTERHEAD_H = 190;
+    var BOXSCORE_TOP = LETTERHEAD_H + 40;
+    var TIMELINE_ROW_H = 46, PERIOD_ROW_H = 40;
+    var timelineH = timeline.reduce(function(sum,t){ return sum + (t.type==="period" ? PERIOD_ROW_H : TIMELINE_ROW_H); }, 0);
+    var BOXSCORE_H = 34 + 14 + timelineH + 20 + 34;
+    var STATS_TOP = BOXSCORE_TOP + BOXSCORE_H + 70;
+
+    var attackT = grTable(80, 0, 920, attackHeaders, grStatColCenters(4,FIRST_COL_X,LAST_COL_X), attackRows, "ATTACKING");
+    var defendT = grTable(80, 0, 920, defendHeaders, grStatColCenters(3,FIRST_COL_X,LAST_COL_X), defendRows, "DEFENDING");
+    var gkT = grTable(80, 0, 920, gkHeaders, grStatColCenters(3,FIRST_COL_X,LAST_COL_X), gkRows, "GOALKEEPING");
+    var TOTAL_H = Math.ceil(STATS_TOP + 40 + attackT.height + 30 + defendT.height + 30 + gkT.height + 60);
+
+    var hexLetterhead = gsFullHexGrid(0,0,W,LETTERHEAD_H,44,"gradBlueLH","#0a1f4d",0.35,0.35);
+
+    var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="'+W+'" height="'+TOTAL_H+'" viewBox="0 0 '+W+' '+TOTAL_H+'">'
+      + '<defs><linearGradient id="gradBlueLH" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#3d6fc9"/><stop offset="45%" stop-color="#1a4fa8"/><stop offset="100%" stop-color="#0d2f6b"/></linearGradient>'
+      + '<clipPath id="clipLH"><rect x="0" y="0" width="'+W+'" height="'+LETTERHEAD_H+'"/></clipPath></defs>'
+      + '<rect x="0" y="0" width="'+W+'" height="'+TOTAL_H+'" fill="'+GR_WHITE+'"/>'
+      + '<rect x="0" y="0" width="'+W+'" height="'+LETTERHEAD_H+'" fill="'+GR_BLUE+'"/>'
+      + '<g clip-path="url(#clipLH)">'+hexLetterhead+'</g>'
+      + '<circle cx="100" cy="95" r="58" fill="'+GR_WHITE+'"/>'
+      + '<image href="'+mhsLogoSrc+'" x="48" y="43" width="104" height="91" preserveAspectRatio="xMidYMid meet"/>'
+      + (engLogoSrc ? '<image href="'+engLogoSrc+'" x="920" y="35" width="110" height="100" preserveAspectRatio="xMidYMid meet"/>' : "")
+      + '<text x="178" y="55" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="21" letter-spacing="3" fill="'+GR_SILVER+'">MIDVIEW GIRLS SOCCER</text>'
+      + '<text x="178" y="84" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="18" letter-spacing="2" fill="'+GR_WHITE+'">'+escapeHtml(gameTypeText)+'</text>'
+      + '<text x="178" y="110" font-family="Arial, Helvetica, sans-serif" font-weight="400" font-size="18" fill="'+GR_SILVER+'">'+escapeHtml(dateText)+'</text>'
+      + '<text x="178" y="155" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="34" fill="'+GR_WHITE+'">MIDVIEW <tspan fill="'+GR_SILVER+'" font-size="22" font-weight="700">vs</tspan> '+escapeHtml(opponent)+'</text>';
+
+    var by = BOXSCORE_TOP;
+    svg += '<text x="80" y="'+(by+22)+'" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="22" letter-spacing="2" fill="'+GR_BLUE+'">BOX SCORE</text>'
+      + '<text x="'+(W-80)+'" y="'+(by+22)+'" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="15" letter-spacing="1" fill="'+GR_DIM+'">MIDVIEW &#8211; '+escapeHtml(opponent)+'</text>'
+      + '<line x1="80" y1="'+(by+34)+'" x2="'+(W-80)+'" y2="'+(by+34)+'" stroke="'+GR_LINE+'" stroke-width="2"/>';
+    var gy = by + 34 + 14;
+    timeline.forEach(function(item){
+      if(item.type === "goal"){
+        var color = item.us ? GR_INK : GR_DIM;
+        var weight = item.us ? "700" : "400";
+        var assistText = item.assist ? '  <tspan fill="'+GR_DIM+'" font-weight="400" font-size="16">(assist: '+escapeHtml(item.assist)+')</tspan>' : "";
+        svg += '<text x="80" y="'+(gy+24)+'" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="18" fill="'+GR_BLUE+'">'+item.minute+'&#8217;</text>'
+          + '<text x="130" y="'+(gy+24)+'" font-family="Arial, Helvetica, sans-serif" font-weight="'+weight+'" font-size="18" fill="'+color+'">'+escapeHtml(item.scorer)+assistText+'</text>'
+          + '<text x="'+(W-80)+'" y="'+(gy+24)+'" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="18" fill="'+GR_INK+'">'+item.score+'</text>';
+        gy += TIMELINE_ROW_H;
+      } else {
+        svg += '<rect x="80" y="'+gy+'" width="'+(W-160)+'" height="'+(PERIOD_ROW_H-6)+'" fill="'+GR_BAND+'"/>'
+          + '<text x="80" y="'+(gy+24)+'" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="16" letter-spacing="2" fill="'+GR_INK+'">'+escapeHtml(item.label)+'</text>'
+          + '<text x="'+(W-80)+'" y="'+(gy+24)+'" text-anchor="end" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="18" fill="'+GR_BLUE+'">'+item.score+'</text>';
+        gy += PERIOD_ROW_H;
+      }
+    });
+    gy += 20;
+    var savesText = saveEntries.length ? saveEntries.map(function(s){ return s.name+" ("+s.count+")"; }).join(", ") : "None";
+    svg += '<text x="80" y="'+(gy+18)+'" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="18" letter-spacing="1" fill="'+GR_BLUE+'">SAVES <tspan fill="'+GR_DIM+'" font-weight="400">&#8211;</tspan> <tspan fill="'+GR_INK+'" font-weight="700">'+escapeHtml(savesText)+'</tspan></text>';
+
+    var sy = STATS_TOP;
+    svg += '<text x="80" y="'+sy+'" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="22" letter-spacing="2" fill="'+GR_BLUE+'">PLAYER STATS</text>';
+    sy += 40;
+    var attackT2 = grTable(80, sy, 920, attackHeaders, grStatColCenters(4,FIRST_COL_X,LAST_COL_X), attackRows, "ATTACKING");
+    svg += attackT2.svg; sy += attackT2.height + 30;
+    var defendT2 = grTable(80, sy, 920, defendHeaders, grStatColCenters(3,FIRST_COL_X,LAST_COL_X), defendRows, "DEFENDING");
+    svg += defendT2.svg; sy += defendT2.height + 30;
+    var gkT2 = grTable(80, sy, 920, gkHeaders, grStatColCenters(3,FIRST_COL_X,LAST_COL_X), gkRows, "GOALKEEPING");
+    svg += gkT2.svg; sy += gkT2.height + 40;
+
+    svg += "</svg>";
+    return svg;
+  }
+  function generateGameReportImage(gameId){
+    if(!can(getCurrentRole(), "gameReport", "generate")){ showToast("You don't have permission to generate this"); return; }
+    var g = state.games.filter(function(gg){ return gg.id===gameId; })[0];
+    if(!g) return;
+    showToast("Generating report\u2026");
+    var svgStr = buildGameReportSVG(g);
+    var svgBlob = new Blob([svgStr], {type: "image/svg+xml;charset=utf-8"});
+    var url = URL.createObjectURL(svgBlob);
+    var img = new Image();
+    img.onload = function(){
+      var canvas = document.createElement("canvas");
+      canvas.width = 1080;
+      canvas.height = img.height;
+      var ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      canvas.toBlob(function(blob){
+        if(!blob){ showToast("Couldn't generate the report \u2014 try again"); return; }
+        var filename = "midview-report-vs-" + (g.opponent||"opponent").replace(/[^a-z0-9]+/gi,"-").toLowerCase() + "-" + g.date + ".png";
+        gsShowPreview(blob, filename);
+      }, "image/png");
+    };
+    img.onerror = function(){
+      showToast("Couldn't generate the report \u2014 try again");
       URL.revokeObjectURL(url);
     };
     img.src = url;
@@ -2219,7 +2494,8 @@
     var canExport = can(role, "season", "csvExport");
     var canUpload = can(role, "season", "uploadToCloud");
     var canDeleteGame = can(role, "season", "deleteGame");
-    var canGenerateSummary = can(role, "gameSummary", "generate");
+    var canGenerateSnapshot = can(role, "gameSnapshot", "generate");
+    var canGenerateReport = can(role, "gameReport", "generate");
 
     var allCompleted = state.games.filter(function(g){ return g.status==="completed"; });
     var completed = allCompleted.filter(function(g){ return gameTypeFilter[g.gameType]; });
@@ -2300,7 +2576,8 @@
           else cloudBtn = '<button class="btn ghost small" data-uploadgame="'+g.id+'">Upload to Cloud</button>';
           rowButtons.push(cloudBtn);
         }
-        if(canGenerateSummary) rowButtons.push('<button class="btn ghost small" data-gamesummary="'+g.id+'">&#128247; Game Summary</button>');
+        if(canGenerateSnapshot) rowButtons.push('<button class="btn ghost small" data-gamesnapshot="'+g.id+'">&#128247; Game Snapshot</button>');
+        if(canGenerateReport) rowButtons.push('<button class="btn ghost small" data-gamereport="'+g.id+'">&#128203; Game Report</button>');
         if(canExport) rowButtons.push('<button class="btn ghost small" data-exportgame="'+g.id+'">Export CSV</button>');
         if(canDeleteGame) rowButtons.push('<button class="btn ghost small" data-delgame="'+g.id+'">'+(g.cloudStatus==="uploaded" ? "Delete Everywhere" : "Delete")+'</button>');
         if(rowButtons.length){
@@ -2352,11 +2629,18 @@
         handleUploadGame(id, renderStats);
       });
     });
-    document.querySelectorAll("[data-gamesummary]").forEach(function(btn){
+    document.querySelectorAll("[data-gamesnapshot]").forEach(function(btn){
       btn.addEventListener("click", function(e){
         e.stopPropagation();
-        var id = btn.getAttribute("data-gamesummary");
-        generateGameSummaryImage(id);
+        var id = btn.getAttribute("data-gamesnapshot");
+        generateGameSnapshotImage(id);
+      });
+    });
+    document.querySelectorAll("[data-gamereport]").forEach(function(btn){
+      btn.addEventListener("click", function(e){
+        e.stopPropagation();
+        var id = btn.getAttribute("data-gamereport");
+        generateGameReportImage(id);
       });
     });
     document.querySelectorAll("[data-toggle]").forEach(function(el){
