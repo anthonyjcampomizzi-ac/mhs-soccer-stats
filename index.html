@@ -1284,7 +1284,7 @@
     var GRASS_COLOR = "#367c0a";
     var turf = '<rect x="0" y="0" width="'+FIELD_W+'" height="'+FIELD_H+'" fill="'+GRASS_COLOR+'"/>';
 
-    var svg = '<svg id="locationFieldSvg" viewBox="0 0 '+FIELD_W+' '+FIELD_H+'" xmlns="http://www.w3.org/2000/svg" style="display:block; width:100%; height:auto; touch-action:none;">'
+    var svg = '<svg id="locationFieldSvg" viewBox="0 0 '+FIELD_W+' '+FIELD_H+'" xmlns="http://www.w3.org/2000/svg" style="display:block; width:100%; height:100%; touch-action:none;">'
       + turf
       + '<rect x="1" y="1" width="'+(FIELD_W-2)+'" height="'+(FIELD_H-2)+'" fill="none" stroke="#ffffff" stroke-width="2"/>'
       + '<line x1="0" y1="'+(FIELD_H/2)+'" x2="'+FIELD_W+'" y2="'+(FIELD_H/2)+'" stroke="#ffffff" stroke-width="2"/>'
@@ -1405,12 +1405,20 @@
       } else {
         locPrompt = "Tap the field to mark where this happened";
       }
-      html += '<div class="selected-banner">'+escapeHtml(locPrompt)+'</div>';
-      html += '<button class="btn ghost small" id="cancelEntryBtn" style="margin-bottom:10px;">Cancel</button>';
-      html += '<div id="locationField" style="border-radius:10px; overflow:hidden; border:1px solid var(--line, #2a3040);">'+buildFieldDiagramSVG(currentLoc)+'</div>';
-      html += '<div class="row" style="margin-top:12px;">';
+      // Flex column filling the available height below the header/above the tab bar --
+      // the field itself is capped by BOTH remaining height and available width (via
+      // aspect-ratio), so it always shrinks to fit on screen instead of overflowing and
+      // forcing a scroll to reach the confirm/skip buttons underneath it.
+      html += '<div style="display:flex; flex-direction:column; height:100%;">';
+      html += '<div class="selected-banner" style="flex-shrink:0;">'+escapeHtml(locPrompt)+'</div>';
+      html += '<button class="btn ghost small" id="cancelEntryBtn" style="margin-bottom:10px; flex-shrink:0;">Cancel</button>';
+      html += '<div style="flex:1; min-height:0; display:flex; align-items:center; justify-content:center;">';
+      html += '<div id="locationField" style="aspect-ratio:'+FIELD_W+'/'+FIELD_H+'; height:100%; max-width:100%; width:auto; margin:0 auto; border-radius:10px; overflow:hidden; border:1px solid var(--line, #2a3040);">'+buildFieldDiagramSVG(currentLoc)+'</div>';
+      html += '</div>';
+      html += '<div class="row" style="margin-top:12px; flex-shrink:0;">';
       html += '<button class="btn" id="useSpotBtn"'+(currentLoc?'':' disabled style="opacity:0.5;"')+'>Use This Spot</button>';
       html += '<button class="btn ghost" id="skipLocationBtn">Skip</button>';
+      html += '</div>';
       html += '</div>';
     } else if(entryState.step === "confirm"){
       html += '<div class="card">';
