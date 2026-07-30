@@ -1649,36 +1649,39 @@
 
     var score = computeScore(g);
     var remaining = computeRemaining(g);
+    var pickingLocation = entryState.step === "location" || entryState.step === "assistLocation";
 
     var html = "";
-    html += '<div class="game-meta">';
-    html += '<div><div class="opp">vs ' + escapeHtml(g.opponent) + '</div>';
-    html += '<div class="sub">' + fmtDate(g.date) + ' &middot; ' + escapeHtml(gameTypeLabel(g.gameType)) + '</div></div>';
-    html += '<div style="text-align:right;">';
-    html += '<div style="font-size:20px; font-weight:800;">' + score.our + ' &ndash; ' + score.their + '</div>';
-    html += '<div style="font-size:10px; color:var(--dim); text-transform:uppercase; letter-spacing:.05em;">Us &ndash; Them</div>';
-    html += '</div>';
-    html += '</div>';
-
-    html += '<div class="clock-wrap">';
-    html += '<div class="clock" id="clockDisplay" style="'+(remaining<0?"color:var(--gold);":"")+'">' + fmtRemaining(remaining) + '</div>';
-    html += '<button class="btn small" id="clockToggle">' + (g.running ? "Pause" : "Start") + '</button>';
-    html += '<div class="spacer"></div>';
-    html += '<span class="half-chip">' + escapeHtml(periodLabel(g, g.periodKey)) + '</span>';
-    html += '</div>';
-
-    if(g.awaitingDecision === "et"){
-      html += '<div class="card" style="border-color:var(--gold);">';
-      html += '<div style="font-weight:700; margin-bottom:10px;">Score level, ' + score.our + '&ndash;' + score.their + '. Start Extra Time?</div>';
-      html += '<div class="row"><button class="btn" id="startEtBtn">Start Extra Time</button><button class="btn ghost" id="endDrawBtn1">End Game (Draw)</button></div>';
+    if(!pickingLocation){
+      html += '<div class="game-meta">';
+      html += '<div><div class="opp">vs ' + escapeHtml(g.opponent) + '</div>';
+      html += '<div class="sub">' + fmtDate(g.date) + ' &middot; ' + escapeHtml(gameTypeLabel(g.gameType)) + '</div></div>';
+      html += '<div style="text-align:right;">';
+      html += '<div style="font-size:20px; font-weight:800;">' + score.our + ' &ndash; ' + score.their + '</div>';
+      html += '<div style="font-size:10px; color:var(--dim); text-transform:uppercase; letter-spacing:.05em;">Us &ndash; Them</div>';
       html += '</div>';
-    } else if(g.awaitingDecision === "shootout"){
-      html += '<div class="card" style="border-color:var(--gold);">';
-      html += '<div style="font-weight:700; margin-bottom:10px;">Still level, ' + score.our + '&ndash;' + score.their + ', after Extra Time. Go to a shootout?</div>';
-      html += '<div class="row"><button class="btn" id="startShootoutBtn">Start Shootout</button><button class="btn ghost" id="endDrawBtn2">End Game (Draw)</button></div>';
       html += '</div>';
-    } else {
-      html += '<button class="btn ghost block" id="endPeriodBtn" style="margin-bottom:14px;">End ' + escapeHtml(periodLabel(g, g.periodKey)) + '</button>';
+
+      html += '<div class="clock-wrap">';
+      html += '<div class="clock" id="clockDisplay" style="'+(remaining<0?"color:var(--gold);":"")+'">' + fmtRemaining(remaining) + '</div>';
+      html += '<button class="btn small" id="clockToggle">' + (g.running ? "Pause" : "Start") + '</button>';
+      html += '<div class="spacer"></div>';
+      html += '<span class="half-chip">' + escapeHtml(periodLabel(g, g.periodKey)) + '</span>';
+      html += '</div>';
+
+      if(g.awaitingDecision === "et"){
+        html += '<div class="card" style="border-color:var(--gold);">';
+        html += '<div style="font-weight:700; margin-bottom:10px;">Score level, ' + score.our + '&ndash;' + score.their + '. Start Extra Time?</div>';
+        html += '<div class="row"><button class="btn" id="startEtBtn">Start Extra Time</button><button class="btn ghost" id="endDrawBtn1">End Game (Draw)</button></div>';
+        html += '</div>';
+      } else if(g.awaitingDecision === "shootout"){
+        html += '<div class="card" style="border-color:var(--gold);">';
+        html += '<div style="font-weight:700; margin-bottom:10px;">Still level, ' + score.our + '&ndash;' + score.their + ', after Extra Time. Go to a shootout?</div>';
+        html += '<div class="row"><button class="btn" id="startShootoutBtn">Start Shootout</button><button class="btn ghost" id="endDrawBtn2">End Game (Draw)</button></div>';
+        html += '</div>';
+      } else {
+        html += '<button class="btn ghost block" id="endPeriodBtn" style="margin-bottom:14px;">End ' + escapeHtml(periodLabel(g, g.periodKey)) + '</button>';
+      }
     }
 
     html += trackingSectionHtml(g);
@@ -1719,7 +1722,8 @@
 
     wireStatsTableSorting(renderGame);
 
-    document.getElementById("clockToggle").addEventListener("click", function(){
+    var clockToggle = document.getElementById("clockToggle");
+    if(clockToggle) clockToggle.addEventListener("click", function(){
       if(g.running){
         g.periodElapsedSec = computePeriodElapsed(g);
         g.running = false;
