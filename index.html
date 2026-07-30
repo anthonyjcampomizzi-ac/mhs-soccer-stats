@@ -649,7 +649,22 @@
     {key:"saves", label:"Save", ic:"&#129508;"},
     {key:"crossesClaimed", label:"Cross Claimed", ic:"&#128588;"}
   ];
-  var ALL_STATS = BASIC_STATS.concat(ADV_STATS).concat(GK_STATS);
+  // PK-specific bookkeeping stats. Each of these ALSO feeds a regular stat above (a PK
+  // goal is still a "goals" event, a PK save is still a "saves" event, etc.) -- these
+  // exist purely so a PK-specific report can be built later without re-deriving it from
+  // the pk:true flag on events. Hidden from the visible tables and the live Event Log,
+  // same treatment as ADV_STATS.
+  var PK_STATS = [
+    {key:"pkGoals", label:"PK Goal", ic:"&#9917;"},
+    {key:"pkAssists", label:"PK Assist", ic:"&#127919;"},
+    {key:"pkShotsSaved", label:"PK Saved", ic:"&#128721;"},
+    {key:"pkShotsMissed", label:"PK Missed", ic:"&#10060;"},
+    {key:"oppPkSaved", label:"Opponent PK Saved", ic:"&#129508;"},
+    {key:"oppPkGoalsAllowed", label:"Opponent PK Allowed", ic:"&#128683;"},
+    {key:"oppPkMissed", label:"Opponent PK Missed", ic:"&#10060;"}
+  ];
+  var ROOT_EVENT_LABELS = { pk: "Penalty Kick", oppPk: "Opponent PK" };
+  var ALL_STATS = BASIC_STATS.concat(ADV_STATS).concat(GK_STATS).concat(PK_STATS);
   var VISIBLE_STATS = BASIC_STATS.concat(GK_STATS);
 
   // ---------- BPS (points) system ----------
@@ -832,13 +847,15 @@
   // ---------- Event entry wizard ----------
   var entryState = null;
   function resetEntry(){
-    entryState = { step:"event", rootKey:null, rootPlayerId:null, assistPlayerId:undefined, onTarget:null, ts:null, clockSec:null, period:null };
+    entryState = { step:"event", rootKey:null, rootPlayerId:null, assistPlayerId:undefined, onTarget:null, pkOutcome:null, loc:null, assistLoc:null, ts:null, clockSec:null, period:null };
   }
   resetEntry();
 
   var CASCADE_MAP = {
     goals: {type:"assist", key:"assists"},
-    shots: {type:"toggle", key:"shotsOnTarget"}
+    shots: {type:"toggle", key:"shotsOnTarget"},
+    pk: {type:"pkOutcome"},
+    oppPk: {type:"oppPkOutcome"}
   };
   var EVENT_PROMPTS = {
     goals:"Who scored?",
@@ -851,7 +868,9 @@
     passesIncomplete:"Who attempted the pass?",
     goalsAllowed:"Who allowed the goal?",
     saves:"Who made the save?",
-    crossesClaimed:"Who claimed the cross?"
+    crossesClaimed:"Who claimed the cross?",
+    pk:"Who's taking the penalty kick?",
+    oppPk:"Who's our goalkeeper for this penalty?"
   };
 
   function lastNameOf(fullName){
@@ -902,7 +921,7 @@
   }
 
   function defaultState(){
-    return { roster:[], games:[], activeGameId:null, activeTab:"roster", activePlayerId:null, shootoutKickerId:null, theme:"dark" };
+    return { roster:[], games:[], activeGameId:null, activeTab:"roster", activePlayerId:null, shootoutKickerId:null, theme:"dark", trackLocations:true };
   }
   var state = loadState();
   save();
@@ -975,6 +994,7 @@
   }
   function statLabel(key){
     for(var i=0;i<ALL_STATS.length;i++){ if(ALL_STATS[i].key===key) return ALL_STATS[i].label; }
+    if(ROOT_EVENT_LABELS[key]) return ROOT_EVENT_LABELS[key];
     if(SHOOTOUT_LABELS[key]) return SHOOTOUT_LABELS[key];
     return key;
   }
@@ -1245,20 +1265,91 @@
     render();
   }
 
+  // ---------- Location field diagram ----------
+  // Real-pitch proportions (105m x 68m), scaled 5x for comfortable SVG units.
+  // Midview's own goal is always at the bottom (y approaches 1), opponent's goal at
+  // the top (y approaches 0) -- one consistent orientation regardless of stat type.
+  var FIELD_W = 340, FIELD_H = 525;
+  function buildFieldDiagramSVG(markerPos){
+    var boxW = 201.5, boxD = 82.5;           // penalty box: 40.3m x 16.5m
+    var sixW = 91.6, sixD = 27.5;            // six-yard box: 18.32m x 5.5m
+    var boxX0 = (FIELD_W-boxW)/2, boxX1 = boxX0+boxW;
+    var sixX0 = (FIELD_W-sixW)/2, sixX1 = sixX0+sixW;
+    var penR = 45.75;                        // penalty arc radius: 9.15m
+    var penSpotOffset = 55;                  // penalty spot: 11m from goal line
+    var archOffset = 36.56;                  // where the penalty arc crosses the box edge
+    var goalW = 36.6;                        // goal frame: 7.32m
+    var goalX0 = (FIELD_W-goalW)/2, goalX1 = goalX0+goalW;
+
+    var GRASS_COLOR = "#367c0a";
+    var turf = '<rect x="0" y="0" width="'+FIELD_W+'" height="'+FIELD_H+'" fill="'+GRASS_COLOR+'"/>';
+
+    var svg = '<svg id="locationFieldSvg" viewBox="0 0 '+FIELD_W+' '+FIELD_H+'" xmlns="http://www.w3.org/2000/svg" style="display:block; width:100%; height:auto; touch-action:none;">'
+      + turf
+      + '<rect x="1" y="1" width="'+(FIELD_W-2)+'" height="'+(FIELD_H-2)+'" fill="none" stroke="#ffffff" stroke-width="2"/>'
+      + '<line x1="0" y1="'+(FIELD_H/2)+'" x2="'+FIELD_W+'" y2="'+(FIELD_H/2)+'" stroke="#ffffff" stroke-width="2"/>'
+      + '<circle cx="'+(FIELD_W/2)+'" cy="'+(FIELD_H/2)+'" r="'+penR+'" fill="none" stroke="#ffffff" stroke-width="2"/>'
+      + '<circle cx="'+(FIELD_W/2)+'" cy="'+(FIELD_H/2)+'" r="2" fill="#ffffff"/>'
+      // Top goal (opponent's) -- arc bulges downward, away from the goal line
+      + '<rect x="'+boxX0+'" y="0" width="'+boxW+'" height="'+boxD+'" fill="none" stroke="#ffffff" stroke-width="2"/>'
+      + '<rect x="'+sixX0+'" y="0" width="'+sixW+'" height="'+sixD+'" fill="none" stroke="#ffffff" stroke-width="2"/>'
+      + '<circle cx="'+(FIELD_W/2)+'" cy="'+penSpotOffset+'" r="2" fill="#ffffff"/>'
+      + '<path d="M '+(FIELD_W/2-archOffset)+' '+boxD+' A '+penR+' '+penR+' 0 0 0 '+(FIELD_W/2+archOffset)+' '+boxD+'" fill="none" stroke="#ffffff" stroke-width="2"/>'
+      + '<rect x="'+goalX0+'" y="-7" width="'+goalW+'" height="7" fill="none" stroke="#ffffff" stroke-width="2"/>'
+      // Bottom goal (Midview's) -- arc bulges upward, away from the goal line
+      + '<rect x="'+boxX0+'" y="'+(FIELD_H-boxD)+'" width="'+boxW+'" height="'+boxD+'" fill="none" stroke="#ffffff" stroke-width="2"/>'
+      + '<rect x="'+sixX0+'" y="'+(FIELD_H-sixD)+'" width="'+sixW+'" height="'+sixD+'" fill="none" stroke="#ffffff" stroke-width="2"/>'
+      + '<circle cx="'+(FIELD_W/2)+'" cy="'+(FIELD_H-penSpotOffset)+'" r="2" fill="#ffffff"/>'
+      + '<path d="M '+(FIELD_W/2-archOffset)+' '+(FIELD_H-boxD)+' A '+penR+' '+penR+' 0 0 1 '+(FIELD_W/2+archOffset)+' '+(FIELD_H-boxD)+'" fill="none" stroke="#ffffff" stroke-width="2"/>'
+      + '<rect x="'+goalX0+'" y="'+FIELD_H+'" width="'+goalW+'" height="7" fill="none" stroke="#ffffff" stroke-width="2"/>'
+      // Corner arcs
+      + '<path d="M 0 8 A 8 8 0 0 0 8 0" fill="none" stroke="#ffffff" stroke-width="1.5"/>'
+      + '<path d="M '+(FIELD_W-8)+' 0 A 8 8 0 0 0 '+FIELD_W+' 8" fill="none" stroke="#ffffff" stroke-width="1.5"/>'
+      + '<path d="M 0 '+(FIELD_H-8)+' A 8 8 0 0 1 8 '+FIELD_H+'" fill="none" stroke="#ffffff" stroke-width="1.5"/>'
+      + '<path d="M '+(FIELD_W-8)+' '+FIELD_H+' A 8 8 0 0 1 '+FIELD_W+' '+(FIELD_H-8)+'" fill="none" stroke="#ffffff" stroke-width="1.5"/>'
+      // Midview goal label -- oriented text near the bottom, reinforcing which end is "ours"
+      + '<text x="'+(FIELD_W/2)+'" y="'+(FIELD_H-10)+'" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="12" letter-spacing="1" fill="rgba(255,255,255,0.55)">MIDVIEW</text>';
+
+    if(markerPos){
+      var mx = markerPos.x * FIELD_W, my = markerPos.y * FIELD_H;
+      svg += '<circle cx="'+mx+'" cy="'+my+'" r="10" fill="#e0a92f" stroke="#0a0d12" stroke-width="2"/>';
+    }
+    svg += '</svg>';
+    return svg;
+  }
+  function renderAssistPicker(g, bannerHtml){
+    var html = "";
+    html += '<div class="selected-banner">'+bannerHtml+'</div>';
+    html += '<button class="btn ghost small" id="cancelEntryBtn" style="margin-bottom:10px;">Cancel</button>';
+    html += '<button class="player-pick-row" data-pickassist="none" style="justify-content:center; color:var(--dim);">No Assist</button>';
+    var ids = sortedPlayerIds(g, "assists", entryState.rootPlayerId);
+    var totals = seasonTotals();
+    ids.forEach(function(pid){
+      var tot = (totals[pid] && totals[pid].assists) || 0;
+      html += '<button class="player-pick-row" data-pickassist="'+pid+'"><span>'+escapeHtml(playerName(pid))+'</span><span class="tot">'+tot+' this season</span></button>';
+    });
+    return html;
+  }
   function trackingSectionHtml(g){
     var html = "";
     if(entryState.step === "event"){
+      html += '<div style="display:flex; align-items:center; justify-content:flex-end; gap:8px; margin-bottom:6px;">';
+      html += '<span style="font-size:12px; color:var(--dim);">Track Location</span>';
+      html += '<button class="toggle'+(state.trackLocations?" on":"")+'" id="trackLocationsToggle"></button>';
+      html += '</div>';
       html += '<h2 class="section-title">Field</h2>';
       html += '<div class="stat-grid">';
       BASIC_STATS.filter(function(s){ return s.key!=="assists" && s.key!=="shotsOnTarget"; }).forEach(function(s){
         html += '<button class="stat-btn basic" data-pickevent="'+s.key+'"><span class="ic">'+s.ic+'</span>' + s.label + '</button>';
       });
+      html += '<button class="stat-btn basic" data-pickevent="pk"><span class="ic">&#9917;</span>Penalty Kick</button>';
       html += '</div>';
       html += '<h2 class="section-title">Goalkeeper</h2>';
       html += '<div class="stat-grid">';
       GK_STATS.forEach(function(s){
         html += '<button class="stat-btn basic" data-pickevent="'+s.key+'"><span class="ic">'+s.ic+'</span>' + s.label + '</button>';
       });
+      html += '<button class="stat-btn basic" data-pickevent="oppPk"><span class="ic">&#9917;</span>Opponent PK</button>';
       html += '</div>';
     } else if(entryState.step === "player"){
       var label = statLabel(entryState.rootKey);
@@ -1275,15 +1366,7 @@
       var cascade = CASCADE_MAP[entryState.rootKey];
       var rootName = playerName(entryState.rootPlayerId);
       if(cascade.type === "assist"){
-        html += '<div class="selected-banner">Who assisted <b>'+escapeHtml(rootName)+'</b>&rsquo;s goal?</div>';
-        html += '<button class="btn ghost small" id="cancelEntryBtn" style="margin-bottom:10px;">Cancel</button>';
-        html += '<button class="player-pick-row" data-pickassist="none" style="justify-content:center; color:var(--dim);">No Assist</button>';
-        var ids2 = sortedPlayerIds(g, "assists", entryState.rootPlayerId);
-        var totals2 = seasonTotals();
-        ids2.forEach(function(pid){
-          var tot = (totals2[pid] && totals2[pid].assists) || 0;
-          html += '<button class="player-pick-row" data-pickassist="'+pid+'"><span>'+escapeHtml(playerName(pid))+'</span><span class="tot">'+tot+' this season</span></button>';
-        });
+        html += renderAssistPicker(g, "Who assisted <b>"+escapeHtml(rootName)+"</b>&rsquo;s goal?");
       } else if(cascade.type === "toggle"){
         html += '<div class="selected-banner">Was <b>'+escapeHtml(rootName)+'</b>&rsquo;s shot on target?</div>';
         html += '<button class="btn ghost small" id="cancelEntryBtn" style="margin-bottom:10px;">Cancel</button>';
@@ -1291,19 +1374,72 @@
         html += '<button class="stat-btn basic" data-target="yes" style="background:var(--good); border-color:var(--good); color:#06210f;"><span class="ic">&#9989;</span>On Target</button>';
         html += '<button class="stat-btn basic" data-target="no" style="background:var(--danger); border-color:var(--danger);"><span class="ic">&#10060;</span>Not on Target</button>';
         html += '</div>';
+      } else if(cascade.type === "pkOutcome"){
+        html += '<div class="selected-banner">What happened on <b>'+escapeHtml(rootName)+'</b>&rsquo;s penalty kick?</div>';
+        html += '<button class="btn ghost small" id="cancelEntryBtn" style="margin-bottom:10px;">Cancel</button>';
+        html += '<div class="stat-grid">';
+        html += '<button class="stat-btn basic" data-pkoutcome="goal" style="background:var(--good); border-color:var(--good); color:#06210f;"><span class="ic">&#9917;</span>Goal</button>';
+        html += '<button class="stat-btn basic" data-pkoutcome="saved"><span class="ic">&#129508;</span>Saved</button>';
+        html += '<button class="stat-btn basic" data-pkoutcome="missed" style="background:var(--danger); border-color:var(--danger);"><span class="ic">&#10060;</span>Missed</button>';
+        html += '</div>';
+      } else if(cascade.type === "oppPkOutcome"){
+        html += '<div class="selected-banner">What happened on the opponent&rsquo;s penalty kick?</div>';
+        html += '<button class="btn ghost small" id="cancelEntryBtn" style="margin-bottom:10px;">Cancel</button>';
+        html += '<div class="stat-grid">';
+        html += '<button class="stat-btn basic" data-pkoutcome="saved" style="background:var(--good); border-color:var(--good); color:#06210f;"><span class="ic">&#129508;</span>Saved</button>';
+        html += '<button class="stat-btn basic" data-pkoutcome="allowed" style="background:var(--danger); border-color:var(--danger);"><span class="ic">&#128683;</span>Allowed</button>';
+        html += '<button class="stat-btn basic" data-pkoutcome="missed"><span class="ic">&#10060;</span>Missed</button>';
+        html += '</div>';
       }
+    } else if(entryState.step === "pkAssist"){
+      var pkScorerName = playerName(entryState.rootPlayerId);
+      html += renderAssistPicker(g, "Who assisted <b>"+escapeHtml(pkScorerName)+"</b>&rsquo;s penalty kick goal?");
+    } else if(entryState.step === "location" || entryState.step === "assistLocation"){
+      var isAssistLoc = entryState.step === "assistLocation";
+      var currentLoc = isAssistLoc ? entryState.assistLoc : entryState.loc;
+      var locPrompt;
+      if(entryState.rootKey === "goals"){
+        locPrompt = isAssistLoc
+          ? "Where was the assist made from?"
+          : "Where was the goal scored from?";
+      } else {
+        locPrompt = "Tap the field to mark where this happened";
+      }
+      html += '<div class="selected-banner">'+escapeHtml(locPrompt)+'</div>';
+      html += '<button class="btn ghost small" id="cancelEntryBtn" style="margin-bottom:10px;">Cancel</button>';
+      html += '<div id="locationField" style="border-radius:10px; overflow:hidden; border:1px solid var(--line, #2a3040);">'+buildFieldDiagramSVG(currentLoc)+'</div>';
+      html += '<div class="row" style="margin-top:12px;">';
+      html += '<button class="btn" id="useSpotBtn"'+(currentLoc?'':' disabled style="opacity:0.5;"')+'>Use This Spot</button>';
+      html += '<button class="btn ghost" id="skipLocationBtn">Skip</button>';
+      html += '</div>';
     } else if(entryState.step === "confirm"){
       html += '<div class="card">';
       html += '<div style="font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.06em; margin-bottom:8px;">Confirm Event</div>';
       html += '<div style="font-size:17px; font-weight:800; margin-bottom:4px;">'+escapeHtml(statLabel(entryState.rootKey))+' &mdash; '+escapeHtml(playerName(entryState.rootPlayerId))+'</div>';
+      if(entryState.pkOutcome){
+        html += '<div style="font-size:13px; color:var(--silver);">Outcome: '+escapeHtml(entryState.pkOutcome.charAt(0).toUpperCase()+entryState.pkOutcome.slice(1))+'</div>';
+      }
       if(entryState.assistPlayerId !== undefined){
         html += '<div style="font-size:13px; color:var(--silver);">Assist: '+(entryState.assistPlayerId ? escapeHtml(playerName(entryState.assistPlayerId)) : "None")+'</div>';
       }
       if(entryState.onTarget !== null){
         html += '<div style="font-size:13px; color:var(--silver);">On Target: '+(entryState.onTarget ? "Yes" : "No")+'</div>';
       }
+      var showsLocation = state.trackLocations && entryState.rootKey !== "pk" && entryState.rootKey !== "oppPk";
+      if(showsLocation){
+        html += '<div style="font-size:13px; color:var(--silver);">Location: '+(entryState.loc ? "Recorded" : "Skipped")+'</div>';
+      }
+      if(entryState.rootKey === "goals" && entryState.assistPlayerId && state.trackLocations){
+        html += '<div style="font-size:13px; color:var(--silver);">Assist Location: '+(entryState.assistLoc ? "Recorded" : "Skipped")+'</div>';
+      }
       if(entryState.rootKey === "goals"){
         html += '<div style="font-size:12px; color:var(--dim); margin-top:6px;">Also logs a Shot and Shot on Target</div>';
+      }
+      if(entryState.rootKey === "pk"){
+        html += '<div style="font-size:12px; color:var(--dim); margin-top:6px;">Also logs as a Shot'+(entryState.pkOutcome!=="missed" ? " and Shot on Target" : "")+(entryState.pkOutcome==="goal" ? ", and counts toward regular Goals" + (entryState.assistPlayerId ? "/Assists" : "") : "")+'</div>';
+      }
+      if(entryState.rootKey === "oppPk" && entryState.pkOutcome !== "missed"){
+        html += '<div style="font-size:12px; color:var(--dim); margin-top:6px;">Also counts toward regular '+(entryState.pkOutcome==="saved"?"Saves":"Goals Allowed")+'</div>';
       }
       html += '</div>';
       html += '<div class="row">';
@@ -1315,12 +1451,20 @@
   }
 
   function wireTrackingSection(g){
+    var trackLocationsToggle = document.getElementById("trackLocationsToggle");
+    if(trackLocationsToggle) trackLocationsToggle.addEventListener("click", function(){
+      state.trackLocations = !state.trackLocations;
+      save();
+      renderGame();
+    });
     document.querySelectorAll("[data-pickevent]").forEach(function(btn){
       btn.addEventListener("click", function(){
         entryState.rootKey = btn.getAttribute("data-pickevent");
         entryState.rootPlayerId = null;
         entryState.assistPlayerId = undefined;
         entryState.onTarget = null;
+        entryState.loc = null;
+        entryState.assistLoc = null;
         entryState.ts = Date.now();
         entryState.clockSec = computePeriodElapsed(g);
         entryState.period = periodLabel(g, g.periodKey);
@@ -1328,10 +1472,19 @@
         renderGame();
       });
     });
+    function tracksLocationFor(rootKey){
+      return state.trackLocations && rootKey !== "pk" && rootKey !== "oppPk";
+    }
     document.querySelectorAll("[data-pickplayer]").forEach(function(btn){
       btn.addEventListener("click", function(){
         entryState.rootPlayerId = btn.getAttribute("data-pickplayer");
-        entryState.step = CASCADE_MAP[entryState.rootKey] ? "cascade" : "confirm";
+        if(CASCADE_MAP[entryState.rootKey]){
+          entryState.step = "cascade";
+        } else if(tracksLocationFor(entryState.rootKey)){
+          entryState.step = "location";
+        } else {
+          entryState.step = "confirm";
+        }
         renderGame();
       });
     });
@@ -1339,16 +1492,56 @@
       btn.addEventListener("click", function(){
         var v = btn.getAttribute("data-pickassist");
         entryState.assistPlayerId = (v==="none") ? null : v;
-        entryState.step = "confirm";
+        entryState.step = tracksLocationFor(entryState.rootKey) ? "location" : "confirm";
         renderGame();
       });
     });
     document.querySelectorAll("[data-target]").forEach(function(btn){
       btn.addEventListener("click", function(){
         entryState.onTarget = (btn.getAttribute("data-target")==="yes");
-        entryState.step = "confirm";
+        entryState.step = tracksLocationFor(entryState.rootKey) ? "location" : "confirm";
         renderGame();
       });
+    });
+    document.querySelectorAll("[data-pkoutcome]").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        entryState.pkOutcome = btn.getAttribute("data-pkoutcome");
+        entryState.step = (entryState.rootKey === "pk" && entryState.pkOutcome === "goal") ? "pkAssist" : "confirm";
+        renderGame();
+      });
+    });
+    var locationField = document.getElementById("locationField");
+    if(locationField) locationField.addEventListener("click", function(evt){
+      var svgEl = document.getElementById("locationFieldSvg");
+      var rect = svgEl.getBoundingClientRect();
+      var x = (evt.clientX - rect.left) / rect.width;
+      var y = (evt.clientY - rect.top) / rect.height;
+      x = Math.max(0, Math.min(1, x));
+      y = Math.max(0, Math.min(1, y));
+      if(entryState.step === "assistLocation"){
+        entryState.assistLoc = {x:x, y:y};
+      } else {
+        entryState.loc = {x:x, y:y};
+      }
+      renderGame();
+    });
+    function advanceFromLocationStep(){
+      if(entryState.step === "location" && entryState.rootKey === "goals" && entryState.assistPlayerId){
+        entryState.step = "assistLocation";
+      } else {
+        entryState.step = "confirm";
+      }
+      renderGame();
+    }
+    var useSpotBtn = document.getElementById("useSpotBtn");
+    if(useSpotBtn) useSpotBtn.addEventListener("click", function(){
+      advanceFromLocationStep();
+    });
+    var skipLocationBtn = document.getElementById("skipLocationBtn");
+    if(skipLocationBtn) skipLocationBtn.addEventListener("click", function(){
+      if(entryState.step === "assistLocation"){ entryState.assistLoc = null; }
+      else { entryState.loc = null; }
+      advanceFromLocationStep();
     });
     var cancelEntryBtn = document.getElementById("cancelEntryBtn");
     if(cancelEntryBtn) cancelEntryBtn.addEventListener("click", function(){
@@ -1360,18 +1553,66 @@
       var ts = entryState.ts || Date.now();
       var clockSec = entryState.clockSec != null ? entryState.clockSec : computePeriodElapsed(g);
       var period = entryState.period || periodLabel(g, g.periodKey);
-      g.events.push({ id: uid("e"), playerId: entryState.rootPlayerId, stat: entryState.rootKey, ts: ts, clockSec: clockSec, period: period });
-      var toastMsg = statLabel(entryState.rootKey) + " \u2014 " + playerName(entryState.rootPlayerId);
-      if(entryState.assistPlayerId !== undefined && entryState.assistPlayerId !== null){
-        g.events.push({ id: uid("e"), playerId: entryState.assistPlayerId, stat: "assists", ts: ts, clockSec: clockSec, period: period });
+      var toastMsg;
+
+      if(entryState.rootKey === "pk"){
+        var shooter = entryState.rootPlayerId;
+        g.events.push({ id: uid("e"), playerId: shooter, stat: "shots", pk: true, ts: ts, clockSec: clockSec, period: period });
+        if(entryState.pkOutcome === "goal"){
+          g.events.push({ id: uid("e"), playerId: shooter, stat: "shotsOnTarget", pk: true, ts: ts, clockSec: clockSec, period: period });
+          g.events.push({ id: uid("e"), playerId: shooter, stat: "goals", pk: true, ts: ts, clockSec: clockSec, period: period });
+          g.events.push({ id: uid("e"), playerId: shooter, stat: "pkGoals", ts: ts, clockSec: clockSec, period: period });
+          if(entryState.assistPlayerId){
+            g.events.push({ id: uid("e"), playerId: entryState.assistPlayerId, stat: "assists", pk: true, ts: ts, clockSec: clockSec, period: period });
+            g.events.push({ id: uid("e"), playerId: entryState.assistPlayerId, stat: "pkAssists", ts: ts, clockSec: clockSec, period: period });
+          }
+          toastMsg = "PK Goal \u2014 " + playerName(shooter);
+        } else if(entryState.pkOutcome === "saved"){
+          g.events.push({ id: uid("e"), playerId: shooter, stat: "shotsOnTarget", pk: true, ts: ts, clockSec: clockSec, period: period });
+          g.events.push({ id: uid("e"), playerId: shooter, stat: "pkShotsSaved", ts: ts, clockSec: clockSec, period: period });
+          toastMsg = "PK Saved \u2014 " + playerName(shooter);
+        } else {
+          g.events.push({ id: uid("e"), playerId: shooter, stat: "pkShotsMissed", ts: ts, clockSec: clockSec, period: period });
+          toastMsg = "PK Missed \u2014 " + playerName(shooter);
+        }
+      } else if(entryState.rootKey === "oppPk"){
+        var keeper = entryState.rootPlayerId;
+        if(entryState.pkOutcome === "saved"){
+          g.events.push({ id: uid("e"), playerId: keeper, stat: "saves", pk: true, ts: ts, clockSec: clockSec, period: period });
+          g.events.push({ id: uid("e"), playerId: keeper, stat: "oppPkSaved", ts: ts, clockSec: clockSec, period: period });
+          toastMsg = "Opponent PK Saved \u2014 " + playerName(keeper);
+        } else if(entryState.pkOutcome === "allowed"){
+          g.events.push({ id: uid("e"), playerId: keeper, stat: "goalsAllowed", pk: true, ts: ts, clockSec: clockSec, period: period });
+          g.events.push({ id: uid("e"), playerId: keeper, stat: "oppPkGoalsAllowed", ts: ts, clockSec: clockSec, period: period });
+          toastMsg = "Opponent PK Allowed \u2014 " + playerName(keeper);
+        } else {
+          g.events.push({ id: uid("e"), playerId: keeper, stat: "oppPkMissed", ts: ts, clockSec: clockSec, period: period });
+          toastMsg = "Opponent PK Missed \u2014 " + playerName(keeper);
+        }
+      } else {
+        var rootEvt = { id: uid("e"), playerId: entryState.rootPlayerId, stat: entryState.rootKey, ts: ts, clockSec: clockSec, period: period };
+        if(entryState.loc) rootEvt.loc = entryState.loc;
+        g.events.push(rootEvt);
+        toastMsg = statLabel(entryState.rootKey) + " \u2014 " + playerName(entryState.rootPlayerId);
+        if(entryState.assistPlayerId !== undefined && entryState.assistPlayerId !== null){
+          var assistEvt = { id: uid("e"), playerId: entryState.assistPlayerId, stat: "assists", ts: ts, clockSec: clockSec, period: period };
+          if(entryState.assistLoc) assistEvt.loc = entryState.assistLoc;
+          g.events.push(assistEvt);
+        }
+        if(entryState.onTarget === true){
+          var sotEvt = { id: uid("e"), playerId: entryState.rootPlayerId, stat: "shotsOnTarget", ts: ts, clockSec: clockSec, period: period };
+          if(entryState.loc) sotEvt.loc = entryState.loc;
+          g.events.push(sotEvt);
+        }
+        if(entryState.rootKey === "goals"){
+          var shotEvt = { id: uid("e"), playerId: entryState.rootPlayerId, stat: "shots", ts: ts, clockSec: clockSec, period: period };
+          var sot2Evt = { id: uid("e"), playerId: entryState.rootPlayerId, stat: "shotsOnTarget", ts: ts, clockSec: clockSec, period: period };
+          if(entryState.loc){ shotEvt.loc = entryState.loc; sot2Evt.loc = entryState.loc; }
+          g.events.push(shotEvt);
+          g.events.push(sot2Evt);
+        }
       }
-      if(entryState.onTarget === true){
-        g.events.push({ id: uid("e"), playerId: entryState.rootPlayerId, stat: "shotsOnTarget", ts: ts, clockSec: clockSec, period: period });
-      }
-      if(entryState.rootKey === "goals"){
-        g.events.push({ id: uid("e"), playerId: entryState.rootPlayerId, stat: "shots", ts: ts, clockSec: clockSec, period: period });
-        g.events.push({ id: uid("e"), playerId: entryState.rootPlayerId, stat: "shotsOnTarget", ts: ts, clockSec: clockSec, period: period });
-      }
+
       save();
       showToast(toastMsg);
       resetEntry();
@@ -1445,16 +1686,19 @@
     html += buildStatsTable(liveTotals, livePlayers, "live_"+g.id);
     html += '</div>';
 
-    html += '<h2 class="section-title">Event Log (' + g.events.length + ')</h2>';
+    var pkShadowKeys = PK_STATS.map(function(s){ return s.key; });
+    var visibleEvents = g.events.filter(function(e){ return pkShadowKeys.indexOf(e.stat) === -1; });
+    html += '<h2 class="section-title">Event Log (' + visibleEvents.length + ')</h2>';
     html += '<div class="card" style="max-height:260px; overflow-y:auto; padding:6px 10px;">';
-    if(g.events.length===0){
+    if(visibleEvents.length===0){
       html += '<div class="empty-hint">Events you log will appear here.</div>';
     }else{
-      var sorted = g.events.slice().sort(function(a,b){return b.ts-a.ts;});
+      var sorted = visibleEvents.slice().sort(function(a,b){return b.ts-a.ts;});
       sorted.forEach(function(e){
+        var penTag = e.pk ? ' <span style="color:var(--dim); font-weight:400;">(pen)</span>' : "";
         html += '<div class="log-item">';
         html += '<span class="t">' + fmtClock(e.clockSec) + '</span>';
-        html += '<span class="who"><span class="stat-tag">'+escapeHtml(statLabel(e.stat))+'</span>' + escapeHtml(playerName(e.playerId)) + '</span>';
+        html += '<span class="who"><span class="stat-tag">'+escapeHtml(statLabel(e.stat))+'</span>' + escapeHtml(playerName(e.playerId)) + penTag + '</span>';
         html += '<button class="x" data-del="'+e.id+'">&#10005;</button>';
         html += '</div>';
       });
@@ -1553,7 +1797,7 @@
     document.getElementById("undoBtn").addEventListener("click", function(){
       if(g.events.length===0) return;
       var last = g.events.reduce(function(a,b){ return a.ts>b.ts ? a : b; });
-      g.events = g.events.filter(function(e){ return e.id!==last.id; });
+      g.events = g.events.filter(function(e){ return e.ts!==last.ts; });
       save();
       renderGame();
     });
@@ -2226,14 +2470,14 @@
         timeline.push({
           type:"goal", minute: grEventMinute(g,e,offsets),
           scorer: playerName(e.playerId), assist: assist ? playerName(assist.playerId) : null,
-          us: true, score: ourScore+"\u2013"+theirScore
+          us: true, score: ourScore+"\u2013"+theirScore, pen: !!e.pk
         });
       } else {
         theirScore++;
         timeline.push({
           type:"goal", minute: grEventMinute(g,e,offsets),
           scorer: g.opponent || "Opponent", assist: null,
-          us: false, score: ourScore+"\u2013"+theirScore
+          us: false, score: ourScore+"\u2013"+theirScore, pen: !!e.pk
         });
       }
     });
@@ -2372,9 +2616,10 @@
       if(item.type === "goal"){
         var color = item.us ? GR_INK : GR_DIM;
         var weight = item.us ? "700" : "400";
+        var penText = item.pen ? '  <tspan fill="'+GR_DIM+'" font-weight="400" font-size="16">(pen)</tspan>' : "";
         var assistText = item.assist ? '  <tspan fill="'+GR_DIM+'" font-weight="400" font-size="16">(assist: '+escapeHtml(item.assist)+')</tspan>' : "";
         svg += '<text x="80" y="'+(gy+24)+'" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="18" fill="'+GR_BLUE+'">'+item.minute+'&#8217;</text>'
-          + '<text x="130" y="'+(gy+24)+'" font-family="Arial, Helvetica, sans-serif" font-weight="'+weight+'" font-size="18" fill="'+color+'">'+escapeHtml(item.scorer)+assistText+'</text>'
+          + '<text x="130" y="'+(gy+24)+'" font-family="Arial, Helvetica, sans-serif" font-weight="'+weight+'" font-size="18" fill="'+color+'">'+escapeHtml(item.scorer)+penText+assistText+'</text>'
           + '<text x="'+(W-80)+'" y="'+(gy+24)+'" text-anchor="end" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="18" fill="'+GR_INK+'">'+item.score+'</text>';
         gy += TIMELINE_ROW_H;
       } else {
@@ -2465,7 +2710,7 @@
   }
 
   function exportEventsCSV(games, label){
-    var rows = [["Date","Opponent","Game Type","Player","Stat","Period","Game Clock","Logged At"]];
+    var rows = [["Date","Opponent","Game Type","Player","Stat","Period","Game Clock","Logged At","Location X","Location Y"]];
     var sortedGames = games.slice().sort(function(a,b){
       return (a.date||"").localeCompare(b.date||"") || (a.createdAt||0)-(b.createdAt||0);
     });
@@ -2480,7 +2725,9 @@
           statLabel(e.stat),
           eventPeriod(e),
           fmtClock(e.clockSec),
-          new Date(e.ts).toLocaleString()
+          new Date(e.ts).toLocaleString(),
+          e.loc ? e.loc.x.toFixed(3) : "",
+          e.loc ? e.loc.y.toFixed(3) : ""
         ]);
       });
     });
