@@ -624,6 +624,11 @@
     </div>
   </div>
 </div>
+<div id="heatmapOverlay" class="gs-preview-overlay" style="display:none;">
+  <div class="gs-preview-card" style="max-width:460px;">
+    <div id="heatmapOverlayContent"></div>
+  </div>
+</div>
 
 <script>
 (function(){
@@ -810,6 +815,9 @@
       // nothing persisted separately to view.
       generate: ["admin", "coach"],
       export: ["admin", "coach"]
+    },
+    heatmap: {
+      view: ["admin", "coach"]
     },
     // --- Not yet built. Config only, ready to attach when each module exists. ---
     coachingReports: {
@@ -1270,7 +1278,8 @@
   // Midview's own goal is always at the bottom (y approaches 1), opponent's goal at
   // the top (y approaches 0) -- one consistent orientation regardless of stat type.
   var FIELD_W = 340, FIELD_H = 525;
-  function buildFieldDiagramSVG(markerPos){
+  function buildFieldDiagramSVG(markerPos, overlaySvg, svgId){
+    svgId = svgId || "locationFieldSvg";
     var boxW = 201.5, boxD = 82.5;           // penalty box: 40.3m x 16.5m
     var sixW = 91.6, sixD = 27.5;            // six-yard box: 18.32m x 5.5m
     var boxX0 = (FIELD_W-boxW)/2, boxX1 = boxX0+boxW;
@@ -1284,7 +1293,7 @@
     var GRASS_COLOR = "#367c0a";
     var turf = '<rect x="0" y="0" width="'+FIELD_W+'" height="'+FIELD_H+'" fill="'+GRASS_COLOR+'"/>';
 
-    var svg = '<svg id="locationFieldSvg" viewBox="0 0 '+FIELD_W+' '+FIELD_H+'" xmlns="http://www.w3.org/2000/svg" style="display:block; width:100%; height:100%; touch-action:none;">'
+    var svg = '<svg id="'+svgId+'" viewBox="0 0 '+FIELD_W+' '+FIELD_H+'" xmlns="http://www.w3.org/2000/svg" style="display:block; width:100%; height:100%; touch-action:none;">'
       + turf
       + '<rect x="1" y="1" width="'+(FIELD_W-2)+'" height="'+(FIELD_H-2)+'" fill="none" stroke="#ffffff" stroke-width="2"/>'
       + '<line x1="0" y1="'+(FIELD_H/2)+'" x2="'+FIELD_W+'" y2="'+(FIELD_H/2)+'" stroke="#ffffff" stroke-width="2"/>'
@@ -1310,12 +1319,86 @@
       // Midview goal label -- oriented text near the bottom, reinforcing which end is "ours"
       + '<text x="'+(FIELD_W/2)+'" y="'+(FIELD_H-10)+'" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="12" letter-spacing="1" fill="rgba(255,255,255,0.55)">MIDVIEW</text>';
 
+    if(overlaySvg) svg += overlaySvg;
     if(markerPos){
       var mx = markerPos.x * FIELD_W, my = markerPos.y * FIELD_H;
       svg += '<circle cx="'+mx+'" cy="'+my+'" r="10" fill="#e0a92f" stroke="#0a0d12" stroke-width="2"/>';
     }
     svg += '</svg>';
     return svg;
+  }
+  function drawHeatmapCanvas(canvas, points){
+    // Kernel-density estimation: at every sample point, sum the influence of every
+    // event (a Gaussian "hill" per event, like elevation). Two things depend on this
+    // sum, but differently:
+    //  - COLOR is driven by absolute overlap count, not by comparison to the rest of
+    //    the view -- a raw sum of ~1 (one event, nothing overlapping it) is always
+    //    yellow; it takes real overlap (sum climbing toward OVERLAP_CAP) to shift
+    //    toward red. This is what makes a single isolated event stay yellow no matter
+    //    what else exists elsewhere on the field.
+    //  - OPACITY is driven by proximity to any event at all, following the Gaussian's
+    //    own natural falloff shape -- solid near a center, fading toward the edge of
+    //    its influence, independent of the color/overlap question.
+    var bufW = 85, bufH = 131; // computed at reduced resolution, then displayed scaled up
+    canvas.width = bufW;
+    canvas.height = bufH;
+    var ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, bufW, bufH);
+    if(!points || points.length === 0) return;
+
+    // Distance computed in real field units (not raw normalized 0-1 coordinates) so
+    // the falloff is a true circle -- the field isn't square, so equal normalized
+    // distances on each axis cover different physical distances and would otherwise
+    // stretch every blob into an oval.
+    var sigma = 20; // field units; ~20% smaller than the effective size before this fix
+    var twoSigmaSq = 2 * sigma * sigma;
+    var OVERLAP_CAP = 4; // raw sum this high (~4 fully-overlapping events) reads as pure red
+
+    var density = new Float32Array(bufW * bufH);
+    for(var yy=0; yy<bufH; yy++){
+      var ny = (yy+0.5) / bufH * FIELD_H;
+      for(var xx=0; xx<bufW; xx++){
+        var nx = (xx+0.5) / bufW * FIELD_W;
+        var sum = 0;
+        for(var i=0; i<points.length; i++){
+          var dx = nx - points[i].x*FIELD_W, dy = ny - points[i].y*FIELD_H;
+          sum += Math.exp(-(dx*dx + dy*dy) / twoSigmaSq);
+        }
+        density[yy*bufW + xx] = sum;
+      }
+    }
+
+    var imgData = ctx.createImageData(bufW, bufH);
+    for(var p=0; p<density.length; p++){
+      var raw = density[p];
+      var o = p*4;
+      if(raw > 0.05){
+        var colorT = Math.max(0, Math.min(1, (raw - 1) / (OVERLAP_CAP - 1)));
+        imgData.data[o]   = 255;
+        imgData.data[o+1] = Math.round(213 + (40-213)*colorT);
+        imgData.data[o+2] = Math.round(60 + (35-60)*colorT);
+        var alphaT = Math.min(1, raw * 3);
+        imgData.data[o+3] = Math.round(alphaT * 240);
+      }
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
+  function heatmapEventsForGame(g, statKeys, playerId, periodFilter){
+    return g.events.filter(function(e){
+      if(!e.loc) return false;
+      if(statKeys.indexOf(e.stat) === -1) return false;
+      if(playerId !== "all" && e.playerId !== playerId) return false;
+      if(periodFilter !== "all" && e.period !== periodFilter) return false;
+      return true;
+    });
+  }
+  function heatmapEventsForSeason(games, statKeys, playerId, gameTypeFilterObj){
+    var out = [];
+    games.forEach(function(g){
+      if(!gameTypeFilterObj[g.gameType]) return;
+      out = out.concat(heatmapEventsForGame(g, statKeys, playerId, "all"));
+    });
+    return out;
   }
   function renderAssistPicker(g, bannerHtml){
     var html = "";
@@ -2395,6 +2478,176 @@
     document.body.removeChild(a);
   });
 
+  // ---------- Heatmap ----------
+  var heatmapState = null;
+
+  function heatmapScopeGames(){
+    if(heatmapState.mode === "game"){
+      var g = state.games.filter(function(gg){ return gg.id === heatmapState.gameId; })[0];
+      return g ? [g] : [];
+    }
+    return state.games.filter(function(gg){ return gg.status === "completed"; });
+  }
+  function heatmapPlayerOptions(){
+    var games = heatmapScopeGames();
+    var statKeys = Object.keys(heatmapState.statFilter).filter(function(k){ return heatmapState.statFilter[k]; });
+    var ids = {};
+    games.forEach(function(g){
+      var scoped = heatmapState.mode === "season"
+        ? (heatmapState.gameTypeFilter[g.gameType] ? g.events : [])
+        : g.events;
+      scoped.forEach(function(e){
+        if(e.loc && statKeys.indexOf(e.stat) !== -1) ids[e.playerId] = true;
+      });
+    });
+    return Object.keys(ids).sort(function(a,b){ return byLastName(playerName(a), playerName(b)); });
+  }
+  function heatmapMatchedEvents(){
+    var statKeys = Object.keys(heatmapState.statFilter).filter(function(k){ return heatmapState.statFilter[k]; });
+    if(heatmapState.mode === "game"){
+      var g = state.games.filter(function(gg){ return gg.id === heatmapState.gameId; })[0];
+      if(!g) return [];
+      return heatmapEventsForGame(g, statKeys, heatmapState.player, heatmapState.period);
+    }
+    return heatmapEventsForSeason(heatmapScopeGames(), statKeys, heatmapState.player, heatmapState.gameTypeFilter);
+  }
+
+  function renderHeatmapOverlay(){
+    // Preserve horizontal scroll position of the chip rows across re-renders --
+    // rebuilding innerHTML on every filter click otherwise resets them to the start,
+    // which is disruptive if the user had scrolled to see chips further along the row.
+    var prevStatScroll = 0, prevGameTypeScroll = 0;
+    var existingStatScroll = document.getElementById("heatmapStatScroll");
+    if(existingStatScroll) prevStatScroll = existingStatScroll.scrollLeft;
+    var existingGameTypeScroll = document.getElementById("heatmapGameTypeScroll");
+    if(existingGameTypeScroll) prevGameTypeScroll = existingGameTypeScroll.scrollLeft;
+
+    var events = heatmapMatchedEvents();
+    var fieldSvg = buildFieldDiagramSVG(null, null, "heatmapFieldSvg");
+
+    var html = "";
+    if(heatmapState.mode === "game"){
+      var g = state.games.filter(function(gg){ return gg.id === heatmapState.gameId; })[0];
+      html += '<div style="font-size:17px; font-weight:800; margin-bottom:12px;">Heatmap &mdash; vs '+escapeHtml(g ? g.opponent : "")+'</div>';
+    } else {
+      html += '<div style="font-size:17px; font-weight:800; margin-bottom:12px;">Season Heatmap</div>';
+    }
+
+    var allStatsOn = VISIBLE_STATS.every(function(s){ return heatmapState.statFilter[s.key]; });
+    html += '<div style="font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.05em; margin-bottom:6px;">Event Types</div>';
+    html += '<div class="chip-scroll" id="heatmapStatScroll" style="padding-top:0; margin-bottom:12px;">';
+    html += '<button class="chip'+(allStatsOn?" selected":"")+'" data-heatstatall="1">All</button>';
+    VISIBLE_STATS.forEach(function(s){
+      var on = heatmapState.statFilter[s.key];
+      html += '<button class="chip'+(on?" selected":"")+'" data-heatstat="'+s.key+'">'+s.label+'</button>';
+    });
+    html += '</div>';
+
+    if(heatmapState.mode === "season"){
+      html += '<div style="font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.05em; margin-bottom:6px;">Game Type</div>';
+      html += '<div class="chip-scroll" id="heatmapGameTypeScroll" style="padding-top:0; margin-bottom:12px;">';
+      GAME_TYPES.forEach(function(t){
+        var on = heatmapState.gameTypeFilter[t.key];
+        html += '<button class="chip'+(on?" selected":"")+'" data-heatgametype="'+t.key+'">'+t.label+'</button>';
+      });
+      html += '</div>';
+    } else {
+      var g2 = state.games.filter(function(gg){ return gg.id === heatmapState.gameId; })[0];
+      var periods = [];
+      if(g2) g2.events.forEach(function(e){ if(periods.indexOf(e.period) === -1) periods.push(e.period); });
+      html += '<div style="font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.05em; margin-bottom:6px;">Period</div>';
+      html += '<select id="heatmapPeriodSelect" style="margin-bottom:12px;">';
+      html += '<option value="all"'+(heatmapState.period==="all"?" selected":"")+'>All Periods</option>';
+      periods.forEach(function(p){
+        html += '<option value="'+escapeHtml(p)+'"'+(heatmapState.period===p?" selected":"")+'>'+escapeHtml(p)+'</option>';
+      });
+      html += '</select>';
+    }
+
+    var playerOpts = heatmapPlayerOptions();
+    html += '<div style="font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.05em; margin-bottom:6px;">Player</div>';
+    html += '<select id="heatmapPlayerSelect" style="margin-bottom:14px;">';
+    html += '<option value="all"'+(heatmapState.player==="all"?" selected":"")+'>All Players</option>';
+    playerOpts.forEach(function(pid){
+      html += '<option value="'+pid+'"'+(heatmapState.player===pid?" selected":"")+'>'+escapeHtml(playerName(pid))+'</option>';
+    });
+    html += '</select>';
+
+    html += '<div style="position:relative; aspect-ratio:'+FIELD_W+'/'+FIELD_H+'; max-height:50vh; margin:0 auto; border-radius:10px; overflow:hidden; border:1px solid var(--line, #2a3040);">';
+    html += fieldSvg;
+    html += '<canvas id="heatmapCanvas" style="position:absolute; inset:0; width:100%; height:100%; pointer-events:none;"></canvas>';
+    html += '</div>';
+    html += '<div style="text-align:center; font-size:12px; color:var(--dim); margin-top:10px;">'+events.length+' event'+(events.length===1?"":"s")+' shown</div>';
+    html += '<button class="btn ghost block" id="heatmapCloseBtn" style="margin-top:14px;">Close</button>';
+
+    document.getElementById("heatmapOverlayContent").innerHTML = html;
+    var newStatScroll = document.getElementById("heatmapStatScroll");
+    if(newStatScroll) newStatScroll.scrollLeft = prevStatScroll;
+    var newGameTypeScroll = document.getElementById("heatmapGameTypeScroll");
+    if(newGameTypeScroll) newGameTypeScroll.scrollLeft = prevGameTypeScroll;
+    drawHeatmapCanvas(document.getElementById("heatmapCanvas"), events.map(function(e){ return e.loc; }));
+    wireHeatmapControls();
+  }
+
+  function wireHeatmapControls(){
+    var allStatBtn = document.querySelector("[data-heatstatall]");
+    if(allStatBtn) allStatBtn.addEventListener("click", function(){
+      var allOn = VISIBLE_STATS.every(function(s){ return heatmapState.statFilter[s.key]; });
+      VISIBLE_STATS.forEach(function(s){ heatmapState.statFilter[s.key] = !allOn; });
+      renderHeatmapOverlay();
+    });
+    document.querySelectorAll("[data-heatstat]").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        var key = btn.getAttribute("data-heatstat");
+        heatmapState.statFilter[key] = !heatmapState.statFilter[key];
+        renderHeatmapOverlay();
+      });
+    });
+    document.querySelectorAll("[data-heatgametype]").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        var key = btn.getAttribute("data-heatgametype");
+        heatmapState.gameTypeFilter[key] = !heatmapState.gameTypeFilter[key];
+        renderHeatmapOverlay();
+      });
+    });
+    var periodSelect = document.getElementById("heatmapPeriodSelect");
+    if(periodSelect) periodSelect.addEventListener("change", function(){
+      heatmapState.period = periodSelect.value;
+      renderHeatmapOverlay();
+    });
+    var playerSelect = document.getElementById("heatmapPlayerSelect");
+    if(playerSelect) playerSelect.addEventListener("change", function(){
+      heatmapState.player = playerSelect.value;
+      renderHeatmapOverlay();
+    });
+    document.getElementById("heatmapCloseBtn").addEventListener("click", closeHeatmapOverlay);
+  }
+
+  function defaultStatFilter(){
+    var f = {};
+    VISIBLE_STATS.forEach(function(s){ f[s.key] = true; });
+    return f;
+  }
+  function defaultGameTypeFilter(){
+    var f = {};
+    GAME_TYPES.forEach(function(t){ f[t.key] = true; });
+    return f;
+  }
+  function openHeatmapForGame(gameId){
+    heatmapState = { mode:"game", gameId: gameId, statFilter: defaultStatFilter(), player:"all", period:"all" };
+    renderHeatmapOverlay();
+    document.getElementById("heatmapOverlay").style.display = "flex";
+  }
+  function openHeatmapForSeason(){
+    heatmapState = { mode:"season", statFilter: defaultStatFilter(), player:"all", gameTypeFilter: defaultGameTypeFilter() };
+    renderHeatmapOverlay();
+    document.getElementById("heatmapOverlay").style.display = "flex";
+  }
+  function closeHeatmapOverlay(){
+    document.getElementById("heatmapOverlay").style.display = "none";
+    heatmapState = null;
+  }
+
   function generateGameSnapshotImage(gameId){
     if(!can(getCurrentRole(), "gameSnapshot", "generate")){ showToast("You don't have permission to generate this"); return; }
     var g = state.games.filter(function(gg){ return gg.id===gameId; })[0];
@@ -2755,6 +3008,7 @@
     var canDeleteGame = can(role, "season", "deleteGame");
     var canGenerateSnapshot = can(role, "gameSnapshot", "generate");
     var canGenerateReport = can(role, "gameReport", "generate");
+    var canViewHeatmap = can(role, "heatmap", "view");
 
     var allCompleted = state.games.filter(function(g){ return g.status==="completed"; });
     var completed = allCompleted.filter(function(g){ return gameTypeFilter[g.gameType]; });
@@ -2790,6 +3044,9 @@
       html += '<button class="btn ghost" id="exportSeasonBtn">Export Totals CSV</button>';
       html += '<button class="btn ghost" id="exportEventsBtn">Export All Events CSV</button>';
       html += '</div>';
+    }
+    if(canViewHeatmap){
+      html += '<button class="btn ghost block" id="seasonHeatmapBtn" style="margin-top:10px;">&#128293; Season Heatmap</button>';
     }
 
     html += '<h2 class="section-title">Game History</h2>';
@@ -2837,6 +3094,7 @@
         }
         if(canGenerateSnapshot) rowButtons.push('<button class="btn ghost small" data-gamesnapshot="'+g.id+'">&#128247; Game Snapshot</button>');
         if(canGenerateReport) rowButtons.push('<button class="btn ghost small" data-gamereport="'+g.id+'">&#128203; Game Report</button>');
+        if(canViewHeatmap) rowButtons.push('<button class="btn ghost small" data-heatmapgame="'+g.id+'">&#128293; Heatmap</button>');
         if(canExport) rowButtons.push('<button class="btn ghost small" data-exportgame="'+g.id+'">Export CSV</button>');
         if(canDeleteGame) rowButtons.push('<button class="btn ghost small" data-delgame="'+g.id+'">'+(g.cloudStatus==="uploaded" ? "Delete Everywhere" : "Delete")+'</button>');
         if(rowButtons.length){
@@ -2901,6 +3159,17 @@
         var id = btn.getAttribute("data-gamereport");
         generateGameReportImage(id);
       });
+    });
+    document.querySelectorAll("[data-heatmapgame]").forEach(function(btn){
+      btn.addEventListener("click", function(e){
+        e.stopPropagation();
+        var id = btn.getAttribute("data-heatmapgame");
+        openHeatmapForGame(id);
+      });
+    });
+    var seasonHeatmapBtn = document.getElementById("seasonHeatmapBtn");
+    if(seasonHeatmapBtn) seasonHeatmapBtn.addEventListener("click", function(){
+      openHeatmapForSeason();
     });
     document.querySelectorAll("[data-toggle]").forEach(function(el){
       el.addEventListener("click", function(){
