@@ -1,4 +1,3 @@
-/* html code */
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -630,6 +629,16 @@
     <div id="heatmapOverlayContent"></div>
   </div>
 </div>
+<div id="shotReportOverlay" class="gs-preview-overlay" style="display:none;">
+  <div class="gs-preview-card" style="max-width:460px;">
+    <div id="shotReportOverlayContent"></div>
+  </div>
+</div>
+<div id="eventLogOverlay" class="gs-preview-overlay" style="display:none;">
+  <div class="gs-preview-card" style="max-width:460px;">
+    <div id="eventLogOverlayContent"></div>
+  </div>
+</div>
 
 <script>
 (function(){
@@ -638,11 +647,11 @@
 
   var BASIC_STATS = [
     {key:"goals", label:"Goal", ic:"&#9917;"},
-    {key:"assists", label:"Assist", ic:"&#127919;"},
+    {key:"assists", label:"Assist", ic:"&#128095;"},
     {key:"shots", label:"Shot", ic:"&#128165;"},
-    {key:"shotsOnTarget", label:"Shot on Target", ic:"&#128204;"},
+    {key:"shotsOnTarget", label:"Shot on Target", ic:"&#127919;"},
     {key:"blocks", label:"Block", ic:"&#128737;"},
-    {key:"clearances", label:"Clearance", ic:"&#8635;"},
+    {key:"clearances", label:"Clearance", ic:"&#128260;"},
     {key:"tackles", label:"Tackle", ic:"&#9995;"}
   ];
   var ADV_STATS = [
@@ -819,6 +828,16 @@
       export: ["admin", "coach"]
     },
     heatmap: {
+      view: ["admin", "coach"]
+    },
+    shotReport: {
+      view: ["admin", "coach"]
+    },
+    momentumChart: {
+      generate: ["admin", "coach"],
+      export: ["admin", "coach"]
+    },
+    eventLog: {
       view: ["admin", "coach"]
     },
     // --- Not yet built. Config only, ready to attach when each module exists. ---
@@ -1280,7 +1299,7 @@
   // Midview's own goal is always at the bottom (y approaches 1), opponent's goal at
   // the top (y approaches 0) -- one consistent orientation regardless of stat type.
   var FIELD_W = 340, FIELD_H = 525;
-  function buildFieldDiagramSVG(markerPos, overlaySvg, svgId){
+  function buildFieldDiagramSVG(markerPos, overlaySvg, svgId, viewBoxOverride){
     svgId = svgId || "locationFieldSvg";
     var boxW = 201.5, boxD = 82.5;           // penalty box: 40.3m x 16.5m
     var sixW = 91.6, sixD = 27.5;            // six-yard box: 18.32m x 5.5m
@@ -1295,7 +1314,7 @@
     var GRASS_COLOR = "#367c0a";
     var turf = '<rect x="0" y="0" width="'+FIELD_W+'" height="'+FIELD_H+'" fill="'+GRASS_COLOR+'"/>';
 
-    var svg = '<svg id="'+svgId+'" viewBox="0 0 '+FIELD_W+' '+FIELD_H+'" xmlns="http://www.w3.org/2000/svg" style="display:block; width:100%; height:100%; touch-action:none;">'
+    var svg = '<svg id="'+svgId+'" viewBox="'+(viewBoxOverride || ("0 0 "+FIELD_W+" "+FIELD_H))+'" xmlns="http://www.w3.org/2000/svg" style="display:block; width:100%; height:100%; touch-action:none;">'
       + turf
       + '<rect x="1" y="1" width="'+(FIELD_W-2)+'" height="'+(FIELD_H-2)+'" fill="none" stroke="#ffffff" stroke-width="2"/>'
       + '<line x1="0" y1="'+(FIELD_H/2)+'" x2="'+FIELD_W+'" y2="'+(FIELD_H/2)+'" stroke="#ffffff" stroke-width="2"/>'
@@ -2381,8 +2400,27 @@
       theirScore: score.their
     };
   }
+  function gsWrapText(text, maxWidth, fontSize){
+    var avgCharWidth = fontSize * 0.52;
+    var maxChars = Math.max(10, Math.floor(maxWidth / avgCharWidth));
+    if(text.length <= maxChars) return [text];
+    var words = text.split(" ");
+    var lines = [];
+    var current = "";
+    words.forEach(function(word){
+      var candidate = current ? current + " " + word : word;
+      if(candidate.length > maxChars && current){
+        lines.push(current);
+        current = word;
+      } else {
+        current = candidate;
+      }
+    });
+    if(current) lines.push(current);
+    return lines;
+  }
   function buildGameSnapshotSVG(g){
-    var W = 1080, H = 1080;
+    var W = 1080;
     var BLUE="#1a4fa8", BLUE_DARK="#0d2f6b", BLUE_LIGHT_EDGE="#3f6bc4";
     var SILVER="#c8d0d8", WHITE="#ffffff", INK="#0a0d12", GOLD="#e0a92f", BLACK="#000000";
 
@@ -2396,21 +2434,42 @@
     var gameTypeText = gameTypeLabel(g.gameType).toUpperCase();
     var motmName = g.motm ? playerName(g.motm) : null;
 
+    // Wrap each stat line if it's too long to fit on one row, and grow the card (and
+    // everything below it) by however much extra height that wrapping needs, rather
+    // than letting long lines overflow the card.
+    var statRows = [
+      {label:"GOALS", text: data.goalsText},
+      {label:"ASSISTS", text: data.assistsText},
+      {label:"SAVES", text: data.savesText}
+    ];
+    var curRowY = 795;
+    statRows.forEach(function(row){
+      row.lines = gsWrapText(row.text, 750, 26);
+      row.y = curRowY;
+      var rowH = row.lines.length <= 1 ? 64 : 64 + (row.lines.length-1)*32;
+      curRowY += rowH;
+    });
+    var lastPillBottom = curRowY - 20;
+    var cardBottom = lastPillBottom + 23;
+    var extraH = Math.max(0, (cardBottom - 780) - 210);
+    var SILVER_BOTTOM = 1010 + extraH;
+    var H = 1080 + extraH;
+
     var hexBlue = gsFullHexGrid(0,0,W,760,51,"gradBlue","#0a1f4d",0.35,0.5);
-    var hexSilver = gsFullHexGrid(0,640,W,1010,51,"gradSilver","#8a97a6",0.4,0.6);
-    var star = gsStarPoints(540,1045,22,9);
+    var hexSilver = gsFullHexGrid(0,640,W,SILVER_BOTTOM,51,"gradSilver","#8a97a6",0.4,0.6);
+    var star = gsStarPoints(540,SILVER_BOTTOM+35,22,9);
 
     var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'">'
       +'<defs>'
         +'<linearGradient id="gradBlue" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#3d6fc9"/><stop offset="45%" stop-color="#1a4fa8"/><stop offset="100%" stop-color="#0d2f6b"/></linearGradient>'
         +'<linearGradient id="gradSilver" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#ffffff"/><stop offset="45%" stop-color="#c8d0d8"/><stop offset="100%" stop-color="#9aa7b3"/></linearGradient>'
         +'<clipPath id="clipBlue"><polygon points="0,0 '+W+',0 '+W+',640 0,760"/></clipPath>'
-        +'<clipPath id="clipSilver"><polygon points="0,760 '+W+',640 '+W+',1010 0,1010"/></clipPath>'
+        +'<clipPath id="clipSilver"><polygon points="0,760 '+W+',640 '+W+','+SILVER_BOTTOM+' 0,'+SILVER_BOTTOM+'"/></clipPath>'
       +'</defs>'
       +'<rect x="0" y="0" width="'+W+'" height="'+H+'" fill="'+WHITE+'"/>'
       +'<polygon points="0,0 '+W+',0 '+W+',640 0,760" fill="'+BLUE+'"/>'
       +'<g clip-path="url(#clipBlue)">'+hexBlue+'</g>'
-      +'<polygon points="0,760 '+W+',640 '+W+',1010 0,1010" fill="'+SILVER+'"/>'
+      +'<polygon points="0,760 '+W+',640 '+W+','+SILVER_BOTTOM+' 0,'+SILVER_BOTTOM+'" fill="'+SILVER+'"/>'
       +'<g clip-path="url(#clipSilver)">'+hexSilver+'</g>'
       +'<circle cx="110" cy="115" r="72" fill="'+WHITE+'"/>'
       +'<image href="data:image/png;base64,'+MHS_LOGO_B64+'" x="46" y="55" width="128" height="113" preserveAspectRatio="xMidYMid meet"/>'
@@ -2426,25 +2485,24 @@
       +'<text x="810" y="539" text-anchor="middle" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="200" fill="'+WHITE+'">'+data.theirScore+'</text>'
       +'<text x="540" y="587" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="26" letter-spacing="10" fill="'+SILVER+'">FINAL</text>'
       +'<line x1="0" y1="760" x2="'+W+'" y2="640" stroke="'+BLACK+'" stroke-width="5"/>'
-      +'<line x1="0" y1="1010" x2="'+W+'" y2="1010" stroke="'+BLACK+'" stroke-width="7"/>'
-      +gsElevatedCardFlat(60,780,960,210,18,WHITE)
-      +'<rect x="80" y="795" width="150" height="44" rx="22" fill="'+BLUE+'"/>'
-      +'<text x="155" y="825" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="22" letter-spacing="2" fill="'+WHITE+'">GOALS</text>'
-      +'<text x="250" y="825" font-family="Arial, Helvetica, sans-serif" font-weight="500" font-size="26" fill="'+INK+'">'+escapeHtml(data.goalsText)+'</text>'
-      +'<rect x="80" y="859" width="150" height="44" rx="22" fill="'+BLUE+'"/>'
-      +'<text x="155" y="889" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="22" letter-spacing="2" fill="'+WHITE+'">ASSISTS</text>'
-      +'<text x="250" y="889" font-family="Arial, Helvetica, sans-serif" font-weight="500" font-size="26" fill="'+INK+'">'+escapeHtml(data.assistsText)+'</text>'
-      +'<rect x="80" y="923" width="150" height="44" rx="22" fill="'+BLUE+'"/>'
-      +'<text x="155" y="953" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="22" letter-spacing="2" fill="'+WHITE+'">SAVES</text>'
-      +'<text x="250" y="953" font-family="Arial, Helvetica, sans-serif" font-weight="500" font-size="26" fill="'+INK+'">'+escapeHtml(data.savesText)+'</text>'
-      +'<rect x="0" y="1010" width="'+W+'" height="70" fill="'+WHITE+'"/>';
+      +'<line x1="0" y1="'+SILVER_BOTTOM+'" x2="'+W+'" y2="'+SILVER_BOTTOM+'" stroke="'+BLACK+'" stroke-width="7"/>'
+      +gsElevatedCardFlat(60,780,960,210+extraH,18,WHITE);
+    statRows.forEach(function(row){
+      svg += '<rect x="80" y="'+row.y+'" width="150" height="44" rx="22" fill="'+BLUE+'"/>'
+        +'<text x="155" y="'+(row.y+30)+'" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="22" letter-spacing="2" fill="'+WHITE+'">'+row.label+'</text>';
+      row.lines.forEach(function(line, i){
+        svg += '<text x="250" y="'+(row.y+30+i*32)+'" font-family="Arial, Helvetica, sans-serif" font-weight="500" font-size="26" fill="'+INK+'">'+escapeHtml(line)+'</text>';
+      });
+    });
+    svg += '<rect x="0" y="'+SILVER_BOTTOM+'" width="'+W+'" height="70" fill="'+WHITE+'"/>';
 
+    var motmTextY = SILVER_BOTTOM + 45;
     if(motmName){
-      svg += '<text x="80" y="1055" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="24" letter-spacing="3" fill="'+INK+'">MIDDIE OF THE MATCH</text>'
+      svg += '<text x="80" y="'+motmTextY+'" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="24" letter-spacing="3" fill="'+INK+'">MIDDIE OF THE MATCH</text>'
         +'<polygon points="'+star+'" fill="'+GOLD+'"/>'
-        +'<text x="1000" y="1055" text-anchor="end" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="32" fill="'+BLUE+'">'+escapeHtml(motmName.toUpperCase())+'</text>';
+        +'<text x="1000" y="'+motmTextY+'" text-anchor="end" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="32" fill="'+BLUE+'">'+escapeHtml(motmName.toUpperCase())+'</text>';
     } else {
-      svg += '<text x="540" y="1055" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="22" letter-spacing="2" fill="'+INK+'">FULL TEAM EFFORT</text>';
+      svg += '<text x="540" y="'+motmTextY+'" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="22" letter-spacing="2" fill="'+INK+'">FULL TEAM EFFORT</text>';
     }
 
     svg += '<rect x="3" y="3" width="'+(W-6)+'" height="'+(H-6)+'" fill="none" stroke="'+BLACK+'" stroke-width="6"/></svg>';
@@ -2650,6 +2708,244 @@
     heatmapState = null;
   }
 
+  // ---------- Shot Report ----------
+  var shotReportState = null;
+  var SR_GOAL_COLOR = "#1a4fa8", SR_STROKE = "#0a0d12", SR_LINE = "#ffffff";
+
+  function shotReportShotsFromGame(g, player, period, outcomeFilter){
+    return g.events.filter(function(e){
+      if(e.stat !== "shots" || !e.loc) return false;
+      if(player !== "all" && e.playerId !== player) return false;
+      if(period !== "all" && e.period !== period) return false;
+      return true;
+    }).map(function(e){
+      var isGoal = g.events.some(function(x){ return x.stat === "goals" && x.ts === e.ts; });
+      var onTarget = isGoal || g.events.some(function(x){ return x.stat === "shotsOnTarget" && x.ts === e.ts; });
+      return { evt: e, outcome: isGoal ? "goal" : (onTarget ? "onTarget" : "offTarget"), game: g };
+    }).filter(function(s){ return outcomeFilter[s.outcome]; });
+  }
+  function shotReportMatchedShots(){
+    if(shotReportState.mode === "game"){
+      var g = state.games.filter(function(gg){ return gg.id === shotReportState.gameId; })[0];
+      return g ? shotReportShotsFromGame(g, shotReportState.player, shotReportState.period, shotReportState.outcomeFilter) : [];
+    }
+    var out = [];
+    state.games.forEach(function(g){
+      if(g.status !== "completed") return;
+      if(!shotReportState.gameTypeFilter[g.gameType]) return;
+      out = out.concat(shotReportShotsFromGame(g, shotReportState.player, "all", shotReportState.outcomeFilter));
+    });
+    return out;
+  }
+  function shotReportPlayerOptions(){
+    var ids = {};
+    if(shotReportState.mode === "game"){
+      var g = state.games.filter(function(gg){ return gg.id === shotReportState.gameId; })[0];
+      if(g) shotReportShotsFromGame(g, "all", shotReportState.period, shotReportState.outcomeFilter).forEach(function(s){ ids[s.evt.playerId] = true; });
+    } else {
+      state.games.forEach(function(g){
+        if(g.status !== "completed" || !shotReportState.gameTypeFilter[g.gameType]) return;
+        shotReportShotsFromGame(g, "all", "all", shotReportState.outcomeFilter).forEach(function(s){ ids[s.evt.playerId] = true; });
+      });
+    }
+    return Object.keys(ids).sort(function(a,b){ return byLastName(playerName(a), playerName(b)); });
+  }
+  function shotReportMarkerKey(shot){ return shot.game.id + "|" + shot.evt.ts; }
+  function shotReportMarkerSvg(shot){
+    var x = shot.evt.loc.x * FIELD_W, y = shot.evt.loc.y * FIELD_H;
+    var r = 10;
+    var attrs = 'data-shotmarker="'+shotReportMarkerKey(shot)+'" data-outcome="'+shot.outcome+'" style="cursor:'+(shot.outcome==="goal"?"pointer":"default")+';"';
+    var svg = '<g '+attrs+'>';
+    if(shot.outcome === "offTarget"){
+      svg += '<circle cx="'+x+'" cy="'+y+'" r="'+r+'" fill="none" stroke="#ffffff" stroke-width="2.5"/>';
+    } else {
+      svg += '<circle cx="'+x+'" cy="'+y+'" r="'+r+'" fill="'+SR_GOAL_COLOR+'" stroke="'+SR_STROKE+'" stroke-width="2.5"/>';
+      if(shot.outcome === "goal"){
+        svg += '<polygon points="'+gsStarPoints(x,y,5.5,2.4)+'" fill="#ffffff"/>';
+      }
+    }
+    svg += '</g>';
+    return svg;
+  }
+  function renderShotReportOverlay(){
+    if(shotReportState.mode === "game" && !state.games.some(function(gg){ return gg.id === shotReportState.gameId; })){
+      closeShotReportOverlay(); return;
+    }
+    var allShots = shotReportMatchedShots();
+    var selected = shotReportState.selectedGoalKey
+      ? allShots.filter(function(s){ return shotReportMarkerKey(s) === shotReportState.selectedGoalKey; })[0]
+      : null;
+
+    var markerSvg = "";
+    var extraSvg = "";
+    if(selected){
+      // Goal-center point on this diagram: Midview always shoots at the top goal.
+      var goalCenterX = FIELD_W/2, goalCenterY = 0;
+      var gx = selected.evt.loc.x*FIELD_W, gy = selected.evt.loc.y*FIELD_H;
+      var assistEvt = selected.game.events.filter(function(e){ return e.stat === "assists" && e.ts === selected.evt.ts; })[0];
+      if(assistEvt && assistEvt.loc){
+        var ax = assistEvt.loc.x*FIELD_W, ay = assistEvt.loc.y*FIELD_H;
+        extraSvg += '<line x1="'+ax+'" y1="'+ay+'" x2="'+gx+'" y2="'+gy+'" stroke="'+SR_LINE+'" stroke-width="3.5" stroke-dasharray="7,7"/>';
+        extraSvg += '<rect x="'+(ax-9)+'" y="'+(ay-9)+'" width="18" height="18" fill="'+SR_GOAL_COLOR+'" stroke="'+SR_STROKE+'" stroke-width="2.5"/>';
+      }
+      extraSvg += '<line x1="'+gx+'" y1="'+gy+'" x2="'+goalCenterX+'" y2="'+goalCenterY+'" stroke="'+SR_LINE+'" stroke-width="3.5" stroke-dasharray="7,7"/>';
+      markerSvg = extraSvg + shotReportMarkerSvg(selected);
+    } else {
+      allShots.forEach(function(s){ markerSvg += shotReportMarkerSvg(s); });
+    }
+
+    var html = "";
+    if(shotReportState.mode === "game"){
+      var g = state.games.filter(function(gg){ return gg.id === shotReportState.gameId; })[0];
+      html += '<div style="font-size:17px; font-weight:800; margin-bottom:12px;">Shot Report &mdash; vs '+escapeHtml(g.opponent)+'</div>';
+
+      var periods = [];
+      g.events.forEach(function(e){ if(e.stat==="shots" && periods.indexOf(e.period)===-1) periods.push(e.period); });
+      html += '<div style="font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.05em; margin-bottom:6px;">Period</div>';
+      html += '<select id="shotReportPeriodSelect" style="margin-bottom:12px;">';
+      html += '<option value="all"'+(shotReportState.period==="all"?" selected":"")+'>All Periods</option>';
+      periods.forEach(function(p){
+        html += '<option value="'+escapeHtml(p)+'"'+(shotReportState.period===p?" selected":"")+'>'+escapeHtml(p)+'</option>';
+      });
+      html += '</select>';
+    } else {
+      html += '<div style="font-size:17px; font-weight:800; margin-bottom:12px;">Season Shot Report</div>';
+      html += '<div style="font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.05em; margin-bottom:6px;">Game Type</div>';
+      html += '<div class="chip-scroll" id="shotReportGameTypeScroll" style="padding-top:0; margin-bottom:12px;">';
+      GAME_TYPES.forEach(function(t){
+        var on = shotReportState.gameTypeFilter[t.key];
+        html += '<button class="chip'+(on?" selected":"")+'" data-srgametype="'+t.key+'">'+t.label+'</button>';
+      });
+      html += '</div>';
+    }
+
+    var outcomeAllOn = shotReportState.outcomeFilter.goal && shotReportState.outcomeFilter.onTarget && shotReportState.outcomeFilter.offTarget;
+    html += '<div style="font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.05em; margin-bottom:6px;">Outcome</div>';
+    html += '<div class="chip-scroll" id="shotReportOutcomeScroll" style="padding-top:0; margin-bottom:12px;">';
+    html += '<button class="chip'+(outcomeAllOn?" selected":"")+'" data-sroutcomeall="1">All</button>';
+    html += '<button class="chip'+(shotReportState.outcomeFilter.goal?" selected":"")+'" data-sroutcome="goal">Goals</button>';
+    html += '<button class="chip'+(shotReportState.outcomeFilter.onTarget?" selected":"")+'" data-sroutcome="onTarget">On Target</button>';
+    html += '<button class="chip'+(shotReportState.outcomeFilter.offTarget?" selected":"")+'" data-sroutcome="offTarget">Off Target</button>';
+    html += '</div>';
+
+    var playerOpts = shotReportPlayerOptions();
+    html += '<div style="font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:.05em; margin-bottom:6px;">Player</div>';
+    html += '<select id="shotReportPlayerSelect" style="margin-bottom:14px;">';
+    html += '<option value="all"'+(shotReportState.player==="all"?" selected":"")+'>All Players</option>';
+    playerOpts.forEach(function(pid){
+      html += '<option value="'+pid+'"'+(shotReportState.player===pid?" selected":"")+'>'+escapeHtml(playerName(pid))+'</option>';
+    });
+    html += '</select>';
+
+    html += '<div style="position:relative; aspect-ratio:'+FIELD_W+'/'+(FIELD_H/2)+'; max-height:65vh; margin:0 auto; border-radius:10px; overflow:hidden; border:1px solid var(--line, #2a3040);">';
+    html += buildFieldDiagramSVG(null, markerSvg, "shotReportFieldSvg", "0 0 "+FIELD_W+" "+(FIELD_H/2));
+    html += '</div>';
+
+    var goalSwatch = '<svg width="14" height="14" viewBox="0 0 24 24" style="vertical-align:middle;"><circle cx="12" cy="12" r="10" fill="'+SR_GOAL_COLOR+'" stroke="'+SR_STROKE+'" stroke-width="2"/><polygon points="'+gsStarPoints(12,12,6,2.6)+'" fill="#ffffff"/></svg>';
+    html += '<div style="display:flex; gap:14px; justify-content:center; align-items:center; flex-wrap:wrap; margin-top:10px; font-size:11px; color:var(--dim);">';
+    html += '<span>'+goalSwatch+' Goal</span>';
+    html += '<span><span style="display:inline-block; width:12px; height:12px; border-radius:50%; background:'+SR_GOAL_COLOR+'; border:1.5px solid '+SR_STROKE+'; vertical-align:middle;"></span> On Target</span>';
+    html += '<span><span style="display:inline-block; width:12px; height:12px; border-radius:50%; background:none; border:1.5px solid #ffffff; vertical-align:middle;"></span> Off Target</span>';
+    html += '<span><span style="display:inline-block; width:12px; height:12px; background:'+SR_GOAL_COLOR+'; border:1.5px solid '+SR_STROKE+'; vertical-align:middle;"></span> Assist</span>';
+    html += '</div>';
+
+    if(selected){
+      var scorerName = playerName(selected.evt.playerId);
+      var assistEvtForDisplay = selected.game.events.filter(function(e){ return e.stat === "assists" && e.ts === selected.evt.ts; })[0];
+      html += '<div style="text-align:center; margin-top:12px;">';
+      html += '<div style="font-size:15px; font-weight:700;">'+escapeHtml(scorerName)+'</div>';
+      html += '<div style="font-size:12px; color:var(--dim); margin-top:2px;">Assist: '+(assistEvtForDisplay ? escapeHtml(playerName(assistEvtForDisplay.playerId)) : "None")+'</div>';
+      html += '</div>';
+      html += '<button class="btn ghost block" id="shotReportShowAllBtn" style="margin-top:10px;">Show All Shots</button>';
+    } else {
+      html += '<div style="text-align:center; font-size:12px; color:var(--dim); margin-top:10px;">'+allShots.length+' shot'+(allShots.length===1?"":"s")+' shown &mdash; tap a goal to see its assist</div>';
+    }
+    html += '<button class="btn ghost block" id="shotReportCloseBtn" style="margin-top:14px;">Close</button>';
+
+    var prevGameTypeScroll = 0, prevOutcomeScroll = 0;
+    var existingGameTypeScroll = document.getElementById("shotReportGameTypeScroll");
+    if(existingGameTypeScroll) prevGameTypeScroll = existingGameTypeScroll.scrollLeft;
+    var existingOutcomeScroll = document.getElementById("shotReportOutcomeScroll");
+    if(existingOutcomeScroll) prevOutcomeScroll = existingOutcomeScroll.scrollLeft;
+
+    document.getElementById("shotReportOverlayContent").innerHTML = html;
+    var newGameTypeScroll = document.getElementById("shotReportGameTypeScroll");
+    if(newGameTypeScroll) newGameTypeScroll.scrollLeft = prevGameTypeScroll;
+    var newOutcomeScroll = document.getElementById("shotReportOutcomeScroll");
+    if(newOutcomeScroll) newOutcomeScroll.scrollLeft = prevOutcomeScroll;
+    wireShotReportControls();
+  }
+  function wireShotReportControls(){
+    document.querySelectorAll('[data-shotmarker]').forEach(function(el){
+      if(el.getAttribute("data-outcome") !== "goal") return;
+      el.addEventListener("click", function(){
+        var key = el.getAttribute("data-shotmarker");
+        shotReportState.selectedGoalKey = (shotReportState.selectedGoalKey === key) ? null : key;
+        renderShotReportOverlay();
+      });
+    });
+    var outcomeAllBtn = document.querySelector("[data-sroutcomeall]");
+    if(outcomeAllBtn) outcomeAllBtn.addEventListener("click", function(){
+      var allOn = shotReportState.outcomeFilter.goal && shotReportState.outcomeFilter.onTarget && shotReportState.outcomeFilter.offTarget;
+      shotReportState.outcomeFilter.goal = !allOn;
+      shotReportState.outcomeFilter.onTarget = !allOn;
+      shotReportState.outcomeFilter.offTarget = !allOn;
+      shotReportState.selectedGoalKey = null;
+      renderShotReportOverlay();
+    });
+    document.querySelectorAll("[data-sroutcome]").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        var key = btn.getAttribute("data-sroutcome");
+        shotReportState.outcomeFilter[key] = !shotReportState.outcomeFilter[key];
+        shotReportState.selectedGoalKey = null;
+        renderShotReportOverlay();
+      });
+    });
+    var periodSelect = document.getElementById("shotReportPeriodSelect");
+    if(periodSelect) periodSelect.addEventListener("change", function(){
+      shotReportState.period = periodSelect.value;
+      shotReportState.selectedGoalKey = null;
+      renderShotReportOverlay();
+    });
+    document.querySelectorAll("[data-srgametype]").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        var key = btn.getAttribute("data-srgametype");
+        shotReportState.gameTypeFilter[key] = !shotReportState.gameTypeFilter[key];
+        shotReportState.selectedGoalKey = null;
+        renderShotReportOverlay();
+      });
+    });
+    var playerSelect = document.getElementById("shotReportPlayerSelect");
+    if(playerSelect) playerSelect.addEventListener("change", function(){
+      shotReportState.player = playerSelect.value;
+      shotReportState.selectedGoalKey = null;
+      renderShotReportOverlay();
+    });
+    var showAllBtn = document.getElementById("shotReportShowAllBtn");
+    if(showAllBtn) showAllBtn.addEventListener("click", function(){
+      shotReportState.selectedGoalKey = null;
+      renderShotReportOverlay();
+    });
+    var closeBtn = document.getElementById("shotReportCloseBtn");
+    if(closeBtn) closeBtn.addEventListener("click", closeShotReportOverlay);
+  }
+  function openShotReportForGame(gameId){
+    shotReportState = { mode:"game", gameId: gameId, player: "all", period: "all", outcomeFilter: {goal:true, onTarget:true, offTarget:true}, selectedGoalKey: null };
+    renderShotReportOverlay();
+    document.getElementById("shotReportOverlay").style.display = "flex";
+  }
+  function openShotReportForSeason(){
+    var gtf = {};
+    GAME_TYPES.forEach(function(t){ gtf[t.key] = true; });
+    shotReportState = { mode:"season", player: "all", gameTypeFilter: gtf, outcomeFilter: {goal:true, onTarget:true, offTarget:true}, selectedGoalKey: null };
+    renderShotReportOverlay();
+    document.getElementById("shotReportOverlay").style.display = "flex";
+  }
+  function closeShotReportOverlay(){
+    document.getElementById("shotReportOverlay").style.display = "none";
+    shotReportState = null;
+  }
+
   function generateGameSnapshotImage(gameId){
     if(!can(getCurrentRole(), "gameSnapshot", "generate")){ showToast("You don't have permission to generate this"); return; }
     var g = state.games.filter(function(gg){ return gg.id===gameId; })[0];
@@ -2662,9 +2958,9 @@
     img.onload = function(){
       var canvas = document.createElement("canvas");
       canvas.width = 1080;
-      canvas.height = 1080;
+      canvas.height = img.height;
       var ctx = canvas.getContext("2d");
-      ctx.drawImage(img, 0, 0, 1080, 1080);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
       URL.revokeObjectURL(url);
       canvas.toBlob(function(blob){
         if(!blob){ showToast("Couldn't generate the image \u2014 try again"); return; }
@@ -2751,6 +3047,22 @@
     timeline.push({type:"period", label:"FULL TIME", score: ourScore+"\u2013"+theirScore});
     return timeline;
   }
+  function grSectionBPS(totals, pid, statKeys){
+    var t = (totals && totals[pid]) || {};
+    var pts = 0;
+    var includesShots = statKeys.indexOf("shots") !== -1 || statKeys.indexOf("shotsOnTarget") !== -1;
+    statKeys.forEach(function(k){
+      if(k === "shots" || k === "shotsOnTarget") return; // handled together below, same derived on/off-target logic as computeBPS
+      pts += (t[k]||0) * (POINT_VALUES[k]||0);
+    });
+    if(includesShots){
+      var shotsOnTarget = t.shotsOnTarget || 0;
+      var shotsOffTarget = Math.max(0, (t.shots||0) - shotsOnTarget);
+      pts += shotsOnTarget * POINT_VALUES.shotsOnTarget;
+      pts += shotsOffTarget * POINT_VALUES.shotsOffTarget;
+    }
+    return pts;
+  }
   function grStatRows(g, statKeys, minStat){
     var totals = aggregate([g]);
     var ids = g.playerIds.filter(function(pid){
@@ -2759,7 +3071,7 @@
       return statKeys.some(function(k){ return (t[k]||0) > 0; });
     });
     ids.sort(function(a,b){
-      var diff = computeBPS(totals,b) - computeBPS(totals,a);
+      var diff = grSectionBPS(totals,b,statKeys) - grSectionBPS(totals,a,statKeys);
       if(diff !== 0) return diff;
       return byLastName(playerName(a), playerName(b));
     });
@@ -2794,6 +3106,7 @@
       });
     });
     var ry = ty + headerH;
+    var totalDataRows = rows.length === 0 ? 1 : rows.length + 1;
     if(rows.length === 0){
       parts.push('<rect x="'+x+'" y="'+ry+'" width="'+w+'" height="'+rowH+'" fill="'+GR_WHITE+'"/>');
       parts.push('<text x="'+(x+16)+'" y="'+(ry+27)+'" font-family="Arial, Helvetica, sans-serif" font-weight="400" font-style="italic" font-size="16" fill="'+GR_DIM+'">No events recorded</text>');
@@ -2810,9 +3123,23 @@
         });
         ry += rowH;
       });
+      var totalsRow = ["TOTAL"];
+      for(var c=1; c<headers.length; c++){
+        var sum = 0;
+        rows.forEach(function(r){ sum += (typeof r[c]==="number" ? r[c] : 0); });
+        totalsRow.push(sum);
+      }
+      parts.push('<rect x="'+x+'" y="'+ry+'" width="'+w+'" height="'+rowH+'" fill="'+GR_BLUE+'" fill-opacity="0.1"/>');
+      parts.push('<line x1="'+x+'" y1="'+ry+'" x2="'+(x+w)+'" y2="'+ry+'" stroke="'+GR_BLUE+'" stroke-width="1.5"/>');
+      totalsRow.forEach(function(val, i){
+        var anchor = i===0 ? "start" : "middle";
+        var tx = positions[i];
+        parts.push('<text x="'+tx+'" y="'+(ry+27)+'" text-anchor="'+anchor+'" font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="17" fill="'+GR_BLUE+'">'+escapeHtml(String(val))+'</text>');
+      });
+      ry += rowH;
     }
-    parts.push('<rect x="'+x+'" y="'+ty+'" width="'+w+'" height="'+(headerH + rowH*Math.max(rows.length,1))+'" fill="none" stroke="'+GR_LINE+'" stroke-width="1.5"/>');
-    return {svg: parts.join(""), height: titleH + headerH + rowH*Math.max(rows.length,1)};
+    parts.push('<rect x="'+x+'" y="'+ty+'" width="'+w+'" height="'+(headerH + rowH*totalDataRows)+'" fill="none" stroke="'+GR_LINE+'" stroke-width="1.5"/>');
+    return {svg: parts.join(""), height: titleH + headerH + rowH*totalDataRows};
   }
   function grStatColCenters(n, firstX, lastX){
     if(n === 1) return [(firstX+lastX)/2];
@@ -2942,6 +3269,310 @@
     img.src = url;
   }
 
+  // ---------- Match Momentum ----------
+  function catmullRomPath(points){
+    if(points.length < 2) return "";
+    var d = "M"+points[0].x.toFixed(2)+","+points[0].y.toFixed(2)+" ";
+    for(var i=0; i<points.length-1; i++){
+      var p0 = points[i-1] || points[i];
+      var p1 = points[i];
+      var p2 = points[i+1];
+      var p3 = points[i+2] || p2;
+      var cp1x = p1.x + (p2.x - p0.x)/6;
+      var cp1y = p1.y + (p2.y - p0.y)/6;
+      var cp2x = p2.x - (p3.x - p1.x)/6;
+      var cp2y = p2.y - (p3.y - p1.y)/6;
+      d += "C"+cp1x.toFixed(2)+","+cp1y.toFixed(2)+" "+cp2x.toFixed(2)+","+cp2y.toFixed(2)+" "+p2.x.toFixed(2)+","+p2.y.toFixed(2)+" ";
+    }
+    return d;
+  }
+  function momentumSoccerBallSvg(cx, cy, r){
+    var svg = '<circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="#ffffff" stroke="#0a0d12" stroke-width="1.5"/>';
+    var pentR = r*0.42;
+    var pentPts = [];
+    for(var i=0;i<5;i++){
+      var angle = (Math.PI/180)*(90+i*72);
+      pentPts.push((cx+pentR*Math.cos(angle)).toFixed(1)+","+(cy-pentR*Math.sin(angle)).toFixed(1));
+    }
+    svg += '<polygon points="'+pentPts.join(" ")+'" fill="#0a0d12"/>';
+    for(var j=0;j<5;j++){
+      var a1 = (Math.PI/180)*(90+j*72);
+      var x1 = cx+pentR*Math.cos(a1), y1 = cy-pentR*Math.sin(a1);
+      var x2 = cx+r*0.88*Math.cos(a1), y2 = cy-r*0.88*Math.sin(a1);
+      svg += '<line x1="'+x1.toFixed(1)+'" y1="'+y1.toFixed(1)+'" x2="'+x2.toFixed(1)+'" y2="'+y2.toFixed(1)+'" stroke="#0a0d12" stroke-width="1.2"/>';
+    }
+    return svg;
+  }
+  function buildMomentumData(g){
+    // One bin per whole minute of the match, covering the FULL duration continuously
+    // (including minutes with no tracked events at all) rather than only plotting
+    // points where something happened -- a quiet stretch should show as a flat,
+    // neutral section of the curve, not get skipped or compressed.
+    var offsets = grMinuteOffsets(g);
+    var totalMinutes = 0;
+    (g.periodPlan || []).forEach(function(p){ totalMinutes += p.durationSec/60; });
+    ["et1","et2"].forEach(function(key){
+      var label = periodLabel(g, key);
+      if(g.events.some(function(e){ return e.period === label; })) totalMinutes += FIXED_PERIOD_DURATIONS[key]/60;
+    });
+    totalMinutes = Math.max(1, Math.round(totalMinutes));
+
+    var bins = [];
+    for(var i=0; i<=totalMinutes; i++) bins.push({sum:0, count:0, goalScored:false, goalAllowed:false});
+
+    g.events.forEach(function(e){
+      if(!e.loc) return;
+      var minute = grEventMinute(g, e, offsets) - 1;
+      minute = Math.max(0, Math.min(totalMinutes, minute));
+      // Field position is 0 (opponent's goal line) to 1 (Midview's own goal line);
+      // invert it so events near the opponent's goal push momentum toward Midview's
+      // side of this chart (near 1) and events near our own goal push toward the
+      // opponent's side (near 0), regardless of which stat type logged the event.
+      var momentum = 1 - e.loc.y;
+      bins[minute].sum += momentum;
+      bins[minute].count += 1;
+      if(e.stat === "goals") bins[minute].goalScored = true;
+      if(e.stat === "goalsAllowed") bins[minute].goalAllowed = true;
+    });
+
+    var values = bins.map(function(b){
+      var v = b.count > 0 ? (b.sum / b.count) : 0.5;
+      if(b.goalScored) v = 1;
+      if(b.goalAllowed) v = 0;
+      return v;
+    });
+
+    var goalMarkers = [];
+    bins.forEach(function(b, i){
+      if(b.goalScored) goalMarkers.push({minute:i, type:"scored"});
+      if(b.goalAllowed) goalMarkers.push({minute:i, type:"allowed"});
+    });
+
+    return { totalMinutes: totalMinutes, values: values, goalMarkers: goalMarkers, periodOffsets: offsets };
+  }
+  function buildMomentumChartSVG(g){
+    var W = 1080, H = 480;
+    var BG = "#12151f", MV_BLUE = "#1a4fa8", OPP_GRAY = "#5b6472", WHITE = "#ffffff";
+
+    var data = buildMomentumData(g);
+    var plotX0 = 100, plotX1 = 1040, plotY0 = 130, plotY1 = 430;
+    var plotW = plotX1-plotX0, plotH = plotY1-plotY0;
+    var centerY = (plotY0+plotY1)/2;
+
+    function xFor(i){ return plotX0 + (i/data.totalMinutes)*plotW; }
+    function yFor(v){ return plotY0 + (1-v)*plotH; }
+
+    var points = data.values.map(function(v,i){ return {x:xFor(i), y:yFor(v)}; });
+    var linePath = catmullRomPath(points);
+    var lastPt = points[points.length-1], firstPt = points[0];
+    var areaPath = linePath + " L"+lastPt.x.toFixed(2)+","+centerY+" L"+firstPt.x.toFixed(2)+","+centerY+" Z";
+
+    var mhsLogoSrc = "data:image/png;base64,"+MHS_LOGO_B64;
+
+    var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'">';
+    svg += '<rect x="0" y="0" width="'+W+'" height="'+H+'" fill="'+BG+'"/>';
+    svg += '<text x="'+(W/2)+'" y="60" text-anchor="middle" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="34" letter-spacing="1" fill="'+WHITE+'">MATCH MOMENTUM</text>';
+
+    svg += '<rect x="'+plotX0+'" y="'+plotY0+'" width="'+plotW+'" height="'+(plotH/2)+'" fill="'+MV_BLUE+'" fill-opacity="0.35"/>';
+    svg += '<rect x="'+plotX0+'" y="'+centerY+'" width="'+plotW+'" height="'+(plotH/2)+'" fill="'+OPP_GRAY+'" fill-opacity="0.35"/>';
+
+    Object.keys(data.periodOffsets).forEach(function(label){
+      var startMin = data.periodOffsets[label];
+      if(startMin <= 0) return;
+      var x = xFor(startMin);
+      svg += '<line x1="'+x.toFixed(2)+'" y1="'+plotY0+'" x2="'+x.toFixed(2)+'" y2="'+plotY1+'" stroke="#000000" stroke-opacity="0.4" stroke-width="2"/>';
+    });
+
+    svg += '<line x1="'+plotX0+'" y1="'+centerY+'" x2="'+plotX1+'" y2="'+centerY+'" stroke="#000000" stroke-opacity="0.5" stroke-width="1.5"/>';
+    svg += '<path d="'+areaPath+'" fill="'+WHITE+'" fill-opacity="0.5"/>';
+    svg += '<path d="'+linePath+'" fill="none" stroke="'+WHITE+'" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>';
+    svg += '<rect x="'+plotX0+'" y="'+plotY0+'" width="'+plotW+'" height="'+plotH+'" fill="none" stroke="#000000" stroke-width="2"/>';
+
+    var badgeCx = 55, badgeCy = (plotY0+centerY)/2, badgeR = 28;
+    svg += '<circle cx="'+badgeCx+'" cy="'+badgeCy+'" r="'+badgeR+'" fill="'+WHITE+'"/>';
+    svg += '<image href="'+mhsLogoSrc+'" x="'+(badgeCx-badgeR*0.85)+'" y="'+(badgeCy-badgeR*0.75)+'" width="'+(badgeR*1.7)+'" height="'+(badgeR*1.5)+'" preserveAspectRatio="xMidYMid meet"/>';
+
+    data.goalMarkers.forEach(function(m){
+      var x = xFor(m.minute);
+      svg += momentumSoccerBallSvg(x, m.type === "scored" ? plotY0-25 : plotY1+25, 14);
+    });
+
+    svg += "</svg>";
+    return svg;
+  }
+  function generateMomentumChartImage(gameId){
+    if(!can(getCurrentRole(), "momentumChart", "generate")){ showToast("You don't have permission to generate this"); return; }
+    var g = state.games.filter(function(gg){ return gg.id===gameId; })[0];
+    if(!g) return;
+    showToast("Generating chart\u2026");
+    var svgStr = buildMomentumChartSVG(g);
+    var svgBlob = new Blob([svgStr], {type: "image/svg+xml;charset=utf-8"});
+    var url = URL.createObjectURL(svgBlob);
+    var img = new Image();
+    img.onload = function(){
+      var canvas = document.createElement("canvas");
+      canvas.width = 1080;
+      canvas.height = img.height;
+      var ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      canvas.toBlob(function(blob){
+        if(!blob){ showToast("Couldn't generate the chart \u2014 try again"); return; }
+        var filename = "midview-momentum-vs-" + (g.opponent||"opponent").replace(/[^a-z0-9]+/gi,"-").toLowerCase() + "-" + g.date + ".png";
+        gsShowPreview(blob, filename);
+      }, "image/png");
+    };
+    img.onerror = function(){
+      showToast("Couldn't generate the chart \u2014 try again");
+      URL.revokeObjectURL(url);
+    };
+    img.src = url;
+  }
+
+  // ---------- Shared letterhead (reused for Game Event Log's header) ----------
+  function buildLetterheadSVG(g, opts){
+    opts = opts || {};
+    var W = 1080;
+    var LH_H = opts.height || 190;
+    var engLogoEl = document.querySelector(".brand-logo");
+    var engLogoSrc = engLogoEl ? engLogoEl.getAttribute("src") : "";
+    var mhsLogoSrc = "data:image/png;base64,"+MHS_LOGO_B64;
+    var opponent = (g.opponent || "Opponent").toUpperCase();
+    var dateText = gsFmtDate(g.date);
+    var gameTypeText = gameTypeLabel(g.gameType).toUpperCase();
+    var hexLetterhead = gsFullHexGrid(0,0,W,LH_H,44,"gradBlueLHShared","#0a1f4d",0.35,0.35);
+
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="'+W+'" height="'+LH_H+'" viewBox="0 0 '+W+' '+LH_H+'" style="display:block; width:100%; height:auto;">'
+      + '<defs><linearGradient id="gradBlueLHShared" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#3d6fc9"/><stop offset="45%" stop-color="#1a4fa8"/><stop offset="100%" stop-color="#0d2f6b"/></linearGradient>'
+      + '<clipPath id="clipLHShared"><rect x="0" y="0" width="'+W+'" height="'+LH_H+'"/></clipPath></defs>'
+      + '<rect x="0" y="0" width="'+W+'" height="'+LH_H+'" fill="'+GR_BLUE+'"/>'
+      + '<g clip-path="url(#clipLHShared)">'+hexLetterhead+'</g>'
+      + '<circle cx="100" cy="95" r="58" fill="'+GR_WHITE+'"/>'
+      + '<image href="'+mhsLogoSrc+'" x="48" y="43" width="104" height="91" preserveAspectRatio="xMidYMid meet"/>'
+      + (engLogoSrc ? '<image href="'+engLogoSrc+'" x="920" y="35" width="110" height="100" preserveAspectRatio="xMidYMid meet"/>' : "")
+      + '<text x="178" y="55" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="21" letter-spacing="3" fill="'+GR_SILVER+'">MIDVIEW GIRLS SOCCER</text>'
+      + '<text x="178" y="84" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="18" letter-spacing="2" fill="'+GR_WHITE+'">'+escapeHtml(gameTypeText)+'</text>'
+      + '<text x="178" y="110" font-family="Arial, Helvetica, sans-serif" font-weight="400" font-size="18" fill="'+GR_SILVER+'">'+escapeHtml(dateText)+'</text>'
+      + '<text x="178" y="155" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="34" fill="'+GR_WHITE+'">MIDVIEW <tspan fill="'+GR_SILVER+'" font-size="22" font-weight="700">vs</tspan> '+escapeHtml(opponent)+'</text>'
+      + '</svg>';
+  }
+
+  // ---------- Game Event Log ----------
+  var eventLogState = null;
+  function statIcon(statKey){
+    var s = ALL_STATS.filter(function(x){ return x.key === statKey; })[0];
+    return s ? s.ic : "";
+  }
+  function collapseShotProgression(events){
+    // A goal always also logs a Shot and Shot on Target at the same timestamp, and a
+    // plain on-target shot always also logs a Shot -- rather than showing all of them
+    // as separate rows for what's really one play, keep only the highest-priority one.
+    var priority = {goals:3, shotsOnTarget:2, shots:1};
+    var byTs = {};
+    var order = [];
+    events.forEach(function(e){
+      if(!byTs[e.ts]){ byTs[e.ts] = []; order.push(e.ts); }
+      byTs[e.ts].push(e);
+    });
+    var out = [];
+    order.forEach(function(ts){
+      var group = byTs[ts];
+      var shotRelated = group.filter(function(e){ return priority[e.stat] !== undefined; });
+      var others = group.filter(function(e){ return priority[e.stat] === undefined; });
+      if(shotRelated.length > 0){
+        var best = shotRelated.reduce(function(a,b){ return priority[b.stat] > priority[a.stat] ? b : a; });
+        out.push(best);
+      }
+      out = out.concat(others);
+    });
+    return out;
+  }
+  function eventLogRows(g){
+    var pkShadowKeys = PK_STATS.map(function(s){ return s.key; });
+    var offsets = grMinuteOffsets(g);
+    var filtered = g.events.filter(function(e){ return pkShadowKeys.indexOf(e.stat) === -1; });
+    var collapsed = collapseShotProgression(filtered).slice().sort(function(a,b){ return a.ts - b.ts; });
+
+    var rows = [];
+    var seenPeriods = [];
+    collapsed.forEach(function(e){
+      if(seenPeriods.indexOf(e.period) === -1){
+        if(seenPeriods.length > 0){
+          // General rule so this extends to Extra Time / Shootout without changes later:
+          // the common 1st-Half-to-2nd-Half transition reads as "HALFTIME"; any other
+          // transition (into ET, between ET periods, into a shootout, etc.) reads as
+          // "END OF <period just finished>".
+          var justFinished = seenPeriods[seenPeriods.length-1];
+          var label = (justFinished === "1st Half" && e.period === "2nd Half") ? "HALFTIME" : ("END OF " + justFinished.toUpperCase());
+          rows.push({type:"period", label:label});
+        }
+        seenPeriods.push(e.period);
+      }
+      rows.push({
+        type: "event",
+        minute: grEventMinute(g, e, offsets),
+        player: playerName(e.playerId),
+        label: statLabel(e.stat) + (e.pk ? " (pen)" : ""),
+        icon: statIcon(e.stat)
+      });
+    });
+    if(collapsed.length > 0) rows.push({type:"period", label:"FULL TIME"});
+    return rows;
+  }
+  function renderEventLogOverlay(){
+    var g = state.games.filter(function(gg){ return gg.id === eventLogState.gameId; })[0];
+    if(!g){ closeEventLogOverlay(); return; }
+    var rows = eventLogRows(g);
+
+    var html = '<div style="border-radius:10px; overflow:hidden; margin-bottom:14px;">'+buildLetterheadSVG(g)+'</div>';
+    html += '<div style="max-height:55vh; overflow-y:auto; border:1px solid var(--line, #2a3040); border-radius:8px;">';
+    html += '<table style="width:100%; border-collapse:collapse; font-size:13px; table-layout:fixed;">';
+    html += '<colgroup><col style="width:15%;"><col style="width:37%;"><col style="width:38%;"><col style="width:10%;"></colgroup>';
+    html += '<thead><tr style="background:'+GR_BLUE_DARK+';">';
+    ["Time","Player","Event",""].forEach(function(h){
+      html += '<th style="padding:8px 8px; text-align:left; color:#ffffff; font-weight:700; font-size:11px; letter-spacing:0.5px; text-transform:uppercase; position:sticky; top:0; background:'+GR_BLUE_DARK+';">'+h+'</th>';
+    });
+    html += '</tr></thead><tbody>';
+    if(rows.length === 0){
+      html += '<tr><td colspan="4" style="padding:16px; text-align:center; color:var(--dim); font-style:italic;">No events recorded</td></tr>';
+    } else {
+      var eventIdx = 0;
+      rows.forEach(function(r){
+        if(r.type === "period"){
+          html += '<tr style="background:'+GR_BAND+';">';
+          html += '<td colspan="4" style="padding:7px 8px; text-align:center; font-weight:700; font-size:11px; letter-spacing:1px; color:'+GR_INK+';">'+escapeHtml(r.label)+'</td>';
+          html += '</tr>';
+          return;
+        }
+        var bg = eventIdx % 2 === 0 ? "#ffffff" : "#f4f6f9";
+        eventIdx++;
+        html += '<tr style="background:'+bg+';">';
+        html += '<td style="padding:7px 8px; color:'+GR_BLUE+'; font-weight:700; white-space:nowrap;">'+r.minute+'&#8217;</td>';
+        html += '<td style="padding:7px 8px; color:'+GR_INK+'; font-weight:700; overflow-wrap:break-word;">'+escapeHtml(r.player)+'</td>';
+        html += '<td style="padding:7px 8px; color:'+GR_INK+'; overflow-wrap:break-word;">'+escapeHtml(r.label)+'</td>';
+        html += '<td style="padding:7px 8px; text-align:center;">'+r.icon+'</td>';
+        html += '</tr>';
+      });
+    }
+    html += '</tbody></table></div>';
+    var eventCount = rows.filter(function(r){ return r.type === "event"; }).length;
+    html += '<div style="text-align:center; font-size:12px; color:var(--dim); margin-top:10px;">'+eventCount+' event'+(eventCount===1?"":"s")+'</div>';
+    html += '<button class="btn ghost block" id="eventLogCloseBtn" style="margin-top:14px;">Close</button>';
+
+    document.getElementById("eventLogOverlayContent").innerHTML = html;
+    document.getElementById("eventLogCloseBtn").addEventListener("click", closeEventLogOverlay);
+  }
+  function openEventLogForGame(gameId){
+    eventLogState = { gameId: gameId };
+    renderEventLogOverlay();
+    document.getElementById("eventLogOverlay").style.display = "flex";
+  }
+  function closeEventLogOverlay(){
+    document.getElementById("eventLogOverlay").style.display = "none";
+    eventLogState = null;
+  }
+
+
   function downloadCSV(rows, filename){
     var csv = rows.map(function(r){
       return r.map(function(cell){
@@ -3011,6 +3642,9 @@
     var canGenerateSnapshot = can(role, "gameSnapshot", "generate");
     var canGenerateReport = can(role, "gameReport", "generate");
     var canViewHeatmap = can(role, "heatmap", "view");
+    var canViewShotReport = can(role, "shotReport", "view");
+    var canGenerateMomentum = can(role, "momentumChart", "generate");
+    var canViewEventLog = can(role, "eventLog", "view");
 
     var allCompleted = state.games.filter(function(g){ return g.status==="completed"; });
     var completed = allCompleted.filter(function(g){ return gameTypeFilter[g.gameType]; });
@@ -3049,6 +3683,9 @@
     }
     if(canViewHeatmap){
       html += '<button class="btn ghost block" id="seasonHeatmapBtn" style="margin-top:10px;">&#128293; Season Heatmap</button>';
+    }
+    if(canViewShotReport){
+      html += '<button class="btn ghost block" id="seasonShotReportBtn" style="margin-top:10px;">&#127919; Season Shot Report</button>';
     }
 
     html += '<h2 class="section-title">Game History</h2>';
@@ -3097,6 +3734,9 @@
         if(canGenerateSnapshot) rowButtons.push('<button class="btn ghost small" data-gamesnapshot="'+g.id+'">&#128247; Game Snapshot</button>');
         if(canGenerateReport) rowButtons.push('<button class="btn ghost small" data-gamereport="'+g.id+'">&#128203; Game Report</button>');
         if(canViewHeatmap) rowButtons.push('<button class="btn ghost small" data-heatmapgame="'+g.id+'">&#128293; Heatmap</button>');
+        if(canViewShotReport) rowButtons.push('<button class="btn ghost small" data-shotreportgame="'+g.id+'">&#127919; Shot Report</button>');
+        if(canGenerateMomentum) rowButtons.push('<button class="btn ghost small" data-momentumgame="'+g.id+'">&#128202; Match Momentum</button>');
+        if(canViewEventLog) rowButtons.push('<button class="btn ghost small" data-eventloggame="'+g.id+'">&#128220; Event Log</button>');
         if(canExport) rowButtons.push('<button class="btn ghost small" data-exportgame="'+g.id+'">Export CSV</button>');
         if(canDeleteGame) rowButtons.push('<button class="btn ghost small" data-delgame="'+g.id+'">'+(g.cloudStatus==="uploaded" ? "Delete Everywhere" : "Delete")+'</button>');
         if(rowButtons.length){
@@ -3169,9 +3809,34 @@
         openHeatmapForGame(id);
       });
     });
+    document.querySelectorAll("[data-shotreportgame]").forEach(function(btn){
+      btn.addEventListener("click", function(e){
+        e.stopPropagation();
+        var id = btn.getAttribute("data-shotreportgame");
+        openShotReportForGame(id);
+      });
+    });
+    document.querySelectorAll("[data-momentumgame]").forEach(function(btn){
+      btn.addEventListener("click", function(e){
+        e.stopPropagation();
+        var id = btn.getAttribute("data-momentumgame");
+        generateMomentumChartImage(id);
+      });
+    });
+    document.querySelectorAll("[data-eventloggame]").forEach(function(btn){
+      btn.addEventListener("click", function(e){
+        e.stopPropagation();
+        var id = btn.getAttribute("data-eventloggame");
+        openEventLogForGame(id);
+      });
+    });
     var seasonHeatmapBtn = document.getElementById("seasonHeatmapBtn");
     if(seasonHeatmapBtn) seasonHeatmapBtn.addEventListener("click", function(){
       openHeatmapForSeason();
+    });
+    var seasonShotReportBtn = document.getElementById("seasonShotReportBtn");
+    if(seasonShotReportBtn) seasonShotReportBtn.addEventListener("click", function(){
+      openShotReportForSeason();
     });
     document.querySelectorAll("[data-toggle]").forEach(function(el){
       el.addEventListener("click", function(){
