@@ -848,7 +848,7 @@
     },
     playerCards: {
       view: ["admin", "coach", "player"],
-      generate: ["admin"],
+      generate: ["admin", "coach"],
       export: ["admin", "coach", "player"]
     },
     seasonSummary: {
@@ -2234,6 +2234,12 @@
     if(!tableSortState[tableId]) tableSortState[tableId] = {key: defaultKey || "goals", dir:"desc"};
     return tableSortState[tableId];
   }
+  function shotsOnTargetPct(totals, pid){
+    var t = totals[pid] || {};
+    var shots = t.shots || 0;
+    var sot = t.shotsOnTarget || 0;
+    return shots > 0 ? (sot / shots * 100) : 0;
+  }
   function sortPlayerIdsByStat(playerIds, totals, sortKey, dir){
     return playerIds.slice().sort(function(a,b){
       var na = playerName(a).toLowerCase(), nb = playerName(b).toLowerCase();
@@ -2246,6 +2252,9 @@
       if(sortKey === "bps"){
         va = computeBPS(totals, a);
         vb = computeBPS(totals, b);
+      } else if(sortKey === "shotsOnTargetPct"){
+        va = shotsOnTargetPct(totals, a);
+        vb = shotsOnTargetPct(totals, b);
       } else {
         va = (totals[a] && totals[a][sortKey]) || 0;
         vb = (totals[b] && totals[b][sortKey]) || 0;
@@ -2266,17 +2275,46 @@
       var label = s.label.replace("Pass ","P");
       var isActive = sort.key === s.key;
       html += '<th class="sortable'+(isActive?" active":"")+'" data-sort-table="'+tableId+'" data-sort-key="'+s.key+'">'+label+(isActive?arrow:"")+'</th>';
+      if(s.key === "shotsOnTarget"){
+        var pctActive = sort.key === "shotsOnTargetPct";
+        html += '<th class="sortable'+(pctActive?" active":"")+'" data-sort-table="'+tableId+'" data-sort-key="shotsOnTargetPct">SOT%'+(pctActive?arrow:"")+'</th>';
+      }
     });
     html += '<th class="sortable bps-col'+(sort.key==="bps"?" active":"")+'" data-sort-table="'+tableId+'" data-sort-key="bps">BPS'+(sort.key==="bps"?arrow:"")+'</th>';
     html += '</tr></thead><tbody>';
     if(sortedIds.length===0){
-      html += '<tr><td colspan="'+(VISIBLE_STATS.length+2)+'" style="color:var(--dim); text-align:center; padding:16px;">No data yet</td></tr>';
+      html += '<tr><td colspan="'+(VISIBLE_STATS.length+3)+'" style="color:var(--dim); text-align:center; padding:16px;">No data yet</td></tr>';
     }else{
+      // Team Total row, always pinned first regardless of sort -- it's a summary, not
+      // a player, so it shouldn't get shuffled into the sorted list.
+      html += '<tr class="team-total-row" style="font-weight:700; background:var(--panel-2, rgba(255,255,255,0.06)); border-bottom:2px solid var(--line, #2a3040);"><td>Team Total</td>';
+      VISIBLE_STATS.forEach(function(s){
+        var teamV = 0;
+        sortedIds.forEach(function(pid){ teamV += (totals[pid] && totals[pid][s.key]) || 0; });
+        html += '<td>'+teamV+'</td>';
+        if(s.key === "shotsOnTarget"){
+          var teamShots = 0, teamSOT = 0;
+          sortedIds.forEach(function(pid){
+            teamShots += (totals[pid] && totals[pid].shots) || 0;
+            teamSOT += (totals[pid] && totals[pid].shotsOnTarget) || 0;
+          });
+          var teamPct = teamShots > 0 ? (teamSOT / teamShots * 100) : 0;
+          html += '<td>'+teamPct.toFixed(0)+'%</td>';
+        }
+      });
+      var teamBPS = 0;
+      sortedIds.forEach(function(pid){ teamBPS += computeBPS(totals, pid); });
+      html += '<td class="bps-col">'+teamBPS+'</td>';
+      html += '</tr>';
+
       sortedIds.forEach(function(pid){
         html += '<tr><td>'+escapeHtml(playerName(pid))+'</td>';
         VISIBLE_STATS.forEach(function(s){
           var v = (totals[pid] && totals[pid][s.key]) || 0;
           html += '<td>'+v+'</td>';
+          if(s.key === "shotsOnTarget"){
+            html += '<td>'+shotsOnTargetPct(totals, pid).toFixed(0)+'%</td>';
+          }
         });
         html += '<td class="bps-col">'+computeBPS(totals, pid)+'</td>';
         html += '</tr>';
@@ -3572,6 +3610,333 @@
     eventLogState = null;
   }
 
+  // ---------- Player Report ----------
+  function prMarker(x, y, shape, color, size){
+    size = size || 10;
+    var stroke = "#0a0d12";
+    if(shape === "circle"){
+      return '<circle cx="'+x+'" cy="'+y+'" r="'+size+'" fill="'+color+'" stroke="'+stroke+'" stroke-width="2"/>';
+    }
+    if(shape === "circle-outline"){
+      return '<circle cx="'+x+'" cy="'+y+'" r="'+size+'" fill="none" stroke="'+color+'" stroke-width="2.5"/>';
+    }
+    if(shape === "circle-star"){
+      return '<circle cx="'+x+'" cy="'+y+'" r="'+size+'" fill="'+color+'" stroke="'+stroke+'" stroke-width="2"/>'
+        + '<polygon points="'+gsStarPoints(x,y,size*0.55,size*0.24)+'" fill="#ffffff"/>';
+    }
+    if(shape === "square"){
+      var half = size*0.85;
+      return '<rect x="'+(x-half)+'" y="'+(y-half)+'" width="'+(half*2)+'" height="'+(half*2)+'" fill="'+color+'" stroke="'+stroke+'" stroke-width="2"/>';
+    }
+    if(shape === "triangle"){
+      var h = size*1.6;
+      return '<polygon points="'+x+','+(y-h*0.6)+' '+(x-h*0.55)+','+(y+h*0.4)+' '+(x+h*0.55)+','+(y+h*0.4)+'" fill="'+color+'" stroke="'+stroke+'" stroke-width="2"/>';
+    }
+    if(shape === "x"){
+      var d = size*0.8;
+      return '<line x1="'+(x-d)+'" y1="'+(y-d)+'" x2="'+(x+d)+'" y2="'+(y+d)+'" stroke="'+color+'" stroke-width="4" stroke-linecap="round"/>'
+        + '<line x1="'+(x-d)+'" y1="'+(y+d)+'" x2="'+(x+d)+'" y2="'+(y-d)+'" stroke="'+color+'" stroke-width="4" stroke-linecap="round"/>';
+    }
+    if(shape === "diamond"){
+      var dd = size*1.1;
+      return '<polygon points="'+x+','+(y-dd)+' '+(x+dd)+','+y+' '+x+','+(y+dd)+' '+(x-dd)+','+y+'" fill="'+color+'" stroke="'+stroke+'" stroke-width="2"/>';
+    }
+    return "";
+  }
+  function playerCompletedGames(pid){
+    return state.games.filter(function(g){
+      return g.status === "completed" && g.playerIds.indexOf(pid) !== -1;
+    }).slice().sort(function(a,b){ return (a.date||"").localeCompare(b.date||"") || (a.createdAt||0)-(b.createdAt||0); });
+  }
+  function playerLocatedEvents(games, pid, statKeys){
+    var out = [];
+    games.forEach(function(g){
+      g.events.forEach(function(e){
+        if(e.playerId === pid && e.loc && statKeys.indexOf(e.stat) !== -1) out.push(e);
+      });
+    });
+    return out;
+  }
+  function playerIsGoalkeeper(pid){
+    return state.games.some(function(g){
+      return g.events.some(function(e){
+        return e.playerId === pid && (e.stat==="saves" || e.stat==="goalsAllowed" || e.stat==="crossesClaimed");
+      });
+    });
+  }
+  function heatmapDataURL(points, width, height){
+    var canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    drawHeatmapCanvas(canvas, points);
+    return canvas.toDataURL("image/png");
+  }
+  function buildPlayerLetterheadSVG(p){
+    var W = 1080, LH_H = 190;
+    var engLogoEl = document.querySelector(".brand-logo");
+    var engLogoSrc = engLogoEl ? engLogoEl.getAttribute("src") : "";
+    var mhsLogoSrc = "data:image/png;base64,"+MHS_LOGO_B64;
+    var metaParts = [];
+    if(p.position) metaParts.push(p.position);
+    if(p.squad) metaParts.push(p.squad);
+    if(p.year) metaParts.push(p.year);
+    var metaLine = metaParts.join(" \u00b7 ").toUpperCase();
+    var asOf = new Date().toLocaleDateString(undefined, {month:"long", day:"numeric", year:"numeric"});
+    var hexLetterhead = gsFullHexGrid(0,0,W,LH_H,44,"gradBlueLHShared","#0a1f4d",0.35,0.35);
+
+    return '<defs><linearGradient id="gradBlueLHShared" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#3d6fc9"/><stop offset="45%" stop-color="#1a4fa8"/><stop offset="100%" stop-color="#0d2f6b"/></linearGradient>'
+      + '<clipPath id="clipLHShared"><rect x="0" y="0" width="'+W+'" height="'+LH_H+'"/></clipPath></defs>'
+      + '<rect x="0" y="0" width="'+W+'" height="'+LH_H+'" fill="'+GR_BLUE+'"/>'
+      + '<g clip-path="url(#clipLHShared)">'+hexLetterhead+'</g>'
+      + '<circle cx="100" cy="95" r="58" fill="'+GR_WHITE+'"/>'
+      + '<image href="'+mhsLogoSrc+'" x="48" y="43" width="104" height="91" preserveAspectRatio="xMidYMid meet"/>'
+      + (engLogoSrc ? '<image href="'+engLogoSrc+'" x="920" y="35" width="110" height="100" preserveAspectRatio="xMidYMid meet"/>' : "")
+      + '<text x="178" y="55" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="21" letter-spacing="3" fill="'+GR_SILVER+'">MIDVIEW GIRLS SOCCER</text>'
+      + (metaLine ? '<text x="178" y="84" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="18" letter-spacing="2" fill="'+GR_WHITE+'">'+escapeHtml(metaLine)+'</text>' : "")
+      + '<text x="178" y="110" font-family="Arial, Helvetica, sans-serif" font-weight="400" font-size="18" fill="'+GR_SILVER+'">As of '+escapeHtml(asOf)+'</text>'
+      + '<text x="178" y="155" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="34" fill="'+GR_WHITE+'">'+escapeHtml(p.name.toUpperCase())+'</text>';
+  }
+  function buildPlayerGameTable(pid, games){
+    var W = 1080, x0 = 80, w = W - 160;
+    var dateW = 85, oppW = 150, typeW = 55;
+    var numCols = ["G","A","SH","SOT","SOT%","BLK","CLR","TKL","SV","GA","CC","BPS"];
+    var statKeyOrder = ["goals","assists","shots","shotsOnTarget","shotsOnTargetPct","blocks","clearances","tackles","saves","goalsAllowed","crossesClaimed","bps"];
+    var numAreaW = w - dateW - oppW - typeW;
+    var colW = numAreaW / numCols.length;
+
+    var rowH = 34, headerH = 44, titleH = 34;
+    var totalRows = games.length + 1; // +1 for the Season Total row
+
+    var parts = [];
+    parts.push('<text x="'+x0+'" y="20" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="20" letter-spacing="2" fill="'+GR_BLUE+'">GAME LOG</text>');
+    var ty = titleH;
+    parts.push('<rect x="'+x0+'" y="'+ty+'" width="'+w+'" height="'+headerH+'" fill="'+GR_BLUE_DARK+'"/>');
+    var cx = x0;
+    function headerCell(label, width, align){
+      var lines = Array.isArray(label) ? label : [label];
+      var tx = align === "start" ? cx+10 : cx+width/2;
+      var lineY = ty + headerH/2 - (lines.length-1)*8 + 4;
+      lines.forEach(function(line){
+        parts.push('<text x="'+tx+'" y="'+lineY+'" text-anchor="'+align+'" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="12" fill="'+GR_WHITE+'">'+line+'</text>');
+        lineY += 15;
+      });
+      cx += width;
+    }
+    headerCell("DATE", dateW, "start");
+    headerCell("OPPONENT", oppW, "start");
+    headerCell("TYPE", typeW, "middle");
+    numCols.forEach(function(label){ headerCell(label, colW, "middle"); });
+
+    var totals = aggregate(games);
+    var seasonRowVals = statKeyOrder.map(function(k){
+      if(k === "shotsOnTargetPct") return shotsOnTargetPct(totals, pid).toFixed(0)+"%";
+      if(k === "bps") return computeBPS(totals, pid);
+      return (totals[pid] && totals[pid][k]) || 0;
+    });
+
+    var ry = ty + headerH;
+    parts.push('<rect x="'+x0+'" y="'+ry+'" width="'+w+'" height="'+rowH+'" fill="'+GR_BLUE+'" fill-opacity="0.1"/>');
+    parts.push('<line x1="'+x0+'" y1="'+ry+'" x2="'+(x0+w)+'" y2="'+ry+'" stroke="'+GR_BLUE+'" stroke-width="1.5"/>');
+    cx = x0;
+    parts.push('<text x="'+(cx+10)+'" y="'+(ry+22)+'" font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="13" fill="'+GR_BLUE+'">SEASON TOTAL</text>');
+    cx += dateW+oppW+typeW;
+    seasonRowVals.forEach(function(v){
+      parts.push('<text x="'+(cx+colW/2)+'" y="'+(ry+22)+'" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="13" fill="'+GR_BLUE+'">'+v+'</text>');
+      cx += colW;
+    });
+    ry += rowH;
+
+    games.forEach(function(g, i){
+      var gTotals = aggregate([g]);
+      var bg = i % 2 === 0 ? GR_WHITE : "#f4f6f9";
+      parts.push('<rect x="'+x0+'" y="'+ry+'" width="'+w+'" height="'+rowH+'" fill="'+bg+'"/>');
+      cx = x0;
+      parts.push('<text x="'+(cx+10)+'" y="'+(ry+22)+'" font-family="Arial, Helvetica, sans-serif" font-weight="400" font-size="12" fill="'+GR_INK+'">'+escapeHtml(fmtDate(g.date))+'</text>');
+      cx += dateW;
+      parts.push('<text x="'+(cx+10)+'" y="'+(ry+22)+'" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="13" fill="'+GR_INK+'">'+escapeHtml(g.opponent||"")+'</text>');
+      cx += oppW;
+      var typeAbbr = {varsity:"V", jv:"JV", tournament:"T", scrimmage:"S"}[g.gameType] || "?";
+      parts.push('<text x="'+(cx+typeW/2)+'" y="'+(ry+22)+'" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="12" fill="'+GR_DIM+'">'+typeAbbr+'</text>');
+      cx += typeW;
+      statKeyOrder.forEach(function(k){
+        var v;
+        if(k === "shotsOnTargetPct") v = shotsOnTargetPct(gTotals, pid).toFixed(0)+"%";
+        else if(k === "bps") v = computeBPS(gTotals, pid);
+        else v = (gTotals[pid] && gTotals[pid][k]) || 0;
+        parts.push('<text x="'+(cx+colW/2)+'" y="'+(ry+22)+'" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="400" font-size="12" fill="'+GR_INK+'">'+v+'</text>');
+        cx += colW;
+      });
+      ry += rowH;
+    });
+
+    parts.push('<rect x="'+x0+'" y="'+ty+'" width="'+w+'" height="'+(headerH+rowH*totalRows)+'" fill="none" stroke="'+GR_LINE+'" stroke-width="1.5"/>');
+    return { svg: parts.join(""), height: titleH + headerH + rowH*totalRows };
+  }
+  function buildPlayerReportSVG(pid){
+    var p = state.roster.filter(function(r){ return r.id === pid; })[0];
+    if(!p) return "";
+    var games = playerCompletedGames(pid);
+    var W = 1080;
+
+    var letterhead = buildPlayerLetterheadSVG(p);
+    var tableTop = 190 + 40;
+    var table = buildPlayerGameTable(pid, games);
+    var sectionsTop = tableTop + table.height + 50;
+
+    // Field-diagram cells laid out two per row.
+    var cellW = 460, cellH = cellW * (FIELD_H/FIELD_W);
+    var gapX = 40, gapY = 60;
+    var col0X = 80, col1X = 80 + cellW + gapX;
+
+    var shotEvents = playerLocatedEvents(games, pid, ["shots"]).map(function(e){
+      var g = games.filter(function(gg){ return gg.events.indexOf(e) !== -1; })[0];
+      var isGoal = g.events.some(function(x){ return x.stat==="goals" && x.ts===e.ts; });
+      var onTarget = isGoal || g.events.some(function(x){ return x.stat==="shotsOnTarget" && x.ts===e.ts; });
+      return { loc:e.loc, outcome: isGoal?"goal":(onTarget?"onTarget":"offTarget") };
+    });
+    var shotMarkers = shotEvents.map(function(s){
+      var x = s.loc.x*FIELD_W, y = s.loc.y*FIELD_H;
+      if(s.outcome === "goal") return prMarker(x,y,"circle-star",GR_BLUE,10);
+      if(s.outcome === "onTarget") return prMarker(x,y,"circle",GR_BLUE,10);
+      return prMarker(x,y,"circle-outline","#ffffff",10);
+    }).join("");
+    var shotFieldSvg = buildFieldDiagramSVG(null, shotMarkers, "prShotField", "0 0 "+FIELD_W+" "+(FIELD_H/2));
+
+    var defEvents = playerLocatedEvents(games, pid, ["blocks","clearances"]);
+    var defMarkers = defEvents.map(function(e){
+      var x = e.loc.x*FIELD_W, y = e.loc.y*FIELD_H;
+      return e.stat === "blocks" ? prMarker(x,y,"x",GR_BLUE,10) : prMarker(x,y,"diamond",GR_BLUE,10);
+    }).join("");
+    var defFieldSvg = buildFieldDiagramSVG(null, defMarkers, "prDefField", "0 "+(FIELD_H/2)+" "+FIELD_W+" "+(FIELD_H/2));
+
+    var allLocatedEvents = playerLocatedEvents(games, pid, VISIBLE_STATS.map(function(s){return s.key;}));
+    var heatmapImg = "";
+    if(allLocatedEvents.length > 0){
+      var dataUrl = heatmapDataURL(allLocatedEvents.map(function(e){ return e.loc; }), 340, 525);
+      heatmapImg = '<image href="'+dataUrl+'" x="0" y="0" width="'+FIELD_W+'" height="'+FIELD_H+'" preserveAspectRatio="none"/>';
+    }
+    var heatmapFieldSvg = buildFieldDiagramSVG(null, heatmapImg, "prHeatField");
+
+    var isGK = playerIsGoalkeeper(pid);
+    var gkFieldSvg = "";
+    if(isGK){
+      var gkEvents = playerLocatedEvents(games, pid, ["saves","goalsAllowed","crossesClaimed","clearances"]);
+      var gkMarkers = gkEvents.map(function(e){
+        var x = e.loc.x*FIELD_W, y = e.loc.y*FIELD_H;
+        if(e.stat === "saves") return prMarker(x,y,"circle",GR_BLUE,10);
+        if(e.stat === "goalsAllowed") return prMarker(x,y,"circle","#c0392b",10);
+        if(e.stat === "crossesClaimed") return prMarker(x,y,"square",GR_BLUE,10);
+        return prMarker(x,y,"diamond",GR_BLUE,10);
+      }).join("");
+      gkFieldSvg = buildFieldDiagramSVG(null, gkMarkers, "prGkField", "0 "+(FIELD_H/2)+" "+FIELD_W+" "+(FIELD_H/2));
+    }
+
+    var cells = [
+      {title:"SHOT MAP", field:shotFieldSvg},
+      {title:"BLOCKS &amp; CLEARANCES", field:defFieldSvg},
+      {title:"EVENT HEATMAP", field:heatmapFieldSvg}
+    ];
+    if(isGK) cells.push({title:"GOALKEEPER ACTIONS", field:gkFieldSvg});
+
+    var halfCellH = cellW * ((FIELD_H/2)/FIELD_W);
+    var stackGap = 20;
+    var legendH = 32;
+    var col1StackH = (30+halfCellH+legendH) + stackGap + (30+halfCellH+legendH);
+    var col2H = 30+cellH;
+    var pairedRowH = Math.max(col1StackH, col2H);
+    var gkH = isGK ? (30+halfCellH+legendH) : 0;
+    var H = sectionsTop + pairedRowH + (isGK ? gapY+gkH : 0) + 60;
+
+    function mapLegend(items, x, y, w){
+      var slotW = w / items.length;
+      var out = "";
+      items.forEach(function(item, i){
+        var swatchX = x + slotW*i + 15;
+        var swatchY = y + 15;
+        out += prMarker(swatchX, swatchY, item.shape, item.color, 8);
+        out += '<text x="'+(swatchX+17)+'" y="'+(swatchY+4)+'" font-family="Arial, Helvetica, sans-serif" font-weight="400" font-size="12" fill="'+GR_DIM+'">'+item.label+'</text>';
+      });
+      return out;
+    }
+
+    var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'">';
+    svg += '<rect x="0" y="0" width="'+W+'" height="'+H+'" fill="'+GR_WHITE+'"/>';
+    svg += '<svg x="0" y="0" width="'+W+'" height="190" viewBox="0 0 '+W+' 190">'+letterhead+'</svg>';
+    svg += '<g transform="translate(0,'+tableTop+')">'+table.svg+'</g>';
+
+    function mapCell(title, field, x, y, cw, ch, legendItems){
+      var out = '<text x="'+(x+cw/2)+'" y="'+(y+18)+'" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="16" letter-spacing="1" fill="'+GR_BLUE+'">'+title+'</text>';
+      out += '<svg x="'+x+'" y="'+(y+30)+'" width="'+cw+'" height="'+ch+'" viewBox="0 0 '+cw+' '+ch+'">'+field+'</svg>';
+      out += '<rect x="'+x+'" y="'+(y+30)+'" width="'+cw+'" height="'+ch+'" fill="none" stroke="'+GR_LINE+'" stroke-width="1.5"/>';
+      if(legendItems) out += mapLegend(legendItems, x, y+30+ch, cw);
+      return out;
+    }
+
+    var SHOT_LEGEND = [
+      {shape:"circle-star", color:GR_BLUE, label:"Goal"},
+      {shape:"circle", color:GR_BLUE, label:"On Target"},
+      {shape:"circle-outline", color:"#8a97a6", label:"Off Target"}
+    ];
+    var DEF_LEGEND = [
+      {shape:"x", color:GR_BLUE, label:"Block"},
+      {shape:"diamond", color:GR_BLUE, label:"Clearance"}
+    ];
+    var GK_LEGEND = [
+      {shape:"circle", color:GR_BLUE, label:"Save"},
+      {shape:"circle", color:"#c0392b", label:"Goal Allowed"},
+      {shape:"square", color:GR_BLUE, label:"Cross Claimed"},
+      {shape:"diamond", color:GR_BLUE, label:"Clearance"}
+    ];
+
+    // Shot Map (attacking half) stacked above Blocks & Clearances (defensive half) --
+    // together they read as one full pitch split by purpose, lined up beside the
+    // full-field heatmap rather than each taking a full-height cell of their own.
+    // Each field diagram already has its own crop baked in via buildFieldDiagramSVG's
+    // viewBoxOverride -- this wrapper is just a plain pixel viewport, not a second crop.
+    var shotMapY = sectionsTop;
+    svg += mapCell(cells[0].title, cells[0].field, col0X, shotMapY, cellW, halfCellH, SHOT_LEGEND);
+    var defMapY = shotMapY + 30 + halfCellH + legendH + stackGap;
+    svg += mapCell(cells[1].title, cells[1].field, col0X, defMapY, cellW, halfCellH, DEF_LEGEND);
+
+    svg += mapCell(cells[2].title, cells[2].field, col1X, sectionsTop, cellW, cellH);
+
+    if(isGK){
+      var gkY = sectionsTop + pairedRowH + gapY;
+      svg += mapCell(cells[3].title, cells[3].field, col0X, gkY, cellW, halfCellH, GK_LEGEND);
+    }
+
+    svg += '</svg>';
+    return svg;
+  }
+  function generatePlayerReportImage(pid){
+    if(!can(getCurrentRole(), "playerCards", "generate")){ showToast("You don't have permission to generate this"); return; }
+    var p = state.roster.filter(function(r){ return r.id === pid; })[0];
+    if(!p) return;
+    showToast("Generating report\u2026");
+    var svgStr = buildPlayerReportSVG(pid);
+    var svgBlob = new Blob([svgStr], {type: "image/svg+xml;charset=utf-8"});
+    var url = URL.createObjectURL(svgBlob);
+    var img = new Image();
+    img.onload = function(){
+      var canvas = document.createElement("canvas");
+      canvas.width = 1080;
+      canvas.height = img.height;
+      var ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      canvas.toBlob(function(blob){
+        if(!blob){ showToast("Couldn't generate the report \u2014 try again"); return; }
+        var filename = "midview-player-" + p.name.replace(/[^a-z0-9]+/gi,"-").toLowerCase() + ".png";
+        gsShowPreview(blob, filename);
+      }, "image/png");
+    };
+    img.onerror = function(){
+      showToast("Couldn't generate the report \u2014 try again");
+      URL.revokeObjectURL(url);
+    };
+    img.src = url;
+  }
+
 
   function downloadCSV(rows, filename){
     var csv = rows.map(function(r){
@@ -3643,6 +4008,7 @@
     var canGenerateReport = can(role, "gameReport", "generate");
     var canViewHeatmap = can(role, "heatmap", "view");
     var canViewShotReport = can(role, "shotReport", "view");
+    var canGeneratePlayerReport = can(role, "playerCards", "generate");
     var canGenerateMomentum = can(role, "momentumChart", "generate");
     var canViewEventLog = can(role, "eventLog", "view");
 
@@ -3681,12 +4047,29 @@
       html += '<button class="btn ghost" id="exportEventsBtn">Export All Events CSV</button>';
       html += '</div>';
     }
+    if(canGeneratePlayerReport && state.roster.length > 0){
+      var sortedRosterForReport = state.roster.slice().sort(function(a,b){ return byLastName(a.name, b.name); });
+      html += '<div style="margin-top:14px;">';
+      html += '<label class="field-label">Player Report for</label>';
+      html += '<select id="playerReportSelect">';
+      html += '<option value="">Select a player&hellip;</option>';
+      sortedRosterForReport.forEach(function(p){
+        html += '<option value="'+p.id+'">'+escapeHtml(p.name)+'</option>';
+      });
+      html += '</select>';
+      html += '</div>';
+    }
+    html += '<div class="row" style="margin-top:10px;">';
     if(canViewHeatmap){
-      html += '<button class="btn ghost block" id="seasonHeatmapBtn" style="margin-top:10px;">&#128293; Season Heatmap</button>';
+      html += '<button class="btn ghost" id="seasonHeatmapBtn">&#128293; Season Heatmap</button>';
     }
     if(canViewShotReport){
-      html += '<button class="btn ghost block" id="seasonShotReportBtn" style="margin-top:10px;">&#127919; Season Shot Report</button>';
+      html += '<button class="btn ghost" id="seasonShotReportBtn">&#127919; Season Shot Report</button>';
     }
+    if(canGeneratePlayerReport && state.roster.length > 0){
+      html += '<button class="btn ghost" id="seasonPlayerReportBtn">&#128196; Player Report</button>';
+    }
+    html += '</div>';
 
     html += '<h2 class="section-title">Game History</h2>';
     html += '<div class="card">';
@@ -3837,6 +4220,13 @@
     var seasonShotReportBtn = document.getElementById("seasonShotReportBtn");
     if(seasonShotReportBtn) seasonShotReportBtn.addEventListener("click", function(){
       openShotReportForSeason();
+    });
+    var seasonPlayerReportBtn = document.getElementById("seasonPlayerReportBtn");
+    if(seasonPlayerReportBtn) seasonPlayerReportBtn.addEventListener("click", function(){
+      var sel = document.getElementById("playerReportSelect");
+      var pid = sel ? sel.value : "";
+      if(!pid){ showToast("Pick a player first"); return; }
+      generatePlayerReportImage(pid);
     });
     document.querySelectorAll("[data-toggle]").forEach(function(el){
       el.addEventListener("click", function(){
