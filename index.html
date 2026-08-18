@@ -3678,11 +3678,11 @@
     var mhsLogoSrc = "data:image/png;base64,"+MHS_LOGO_B64;
     var metaParts = [];
     if(p.position) metaParts.push(p.position);
-    if(p.squad) metaParts.push(p.squad);
     if(p.year) metaParts.push(p.year);
     var metaLine = metaParts.join(" \u00b7 ").toUpperCase();
     var asOf = new Date().toLocaleDateString(undefined, {month:"long", day:"numeric", year:"numeric"});
     var hexLetterhead = gsFullHexGrid(0,0,W,LH_H,44,"gradBlueLHShared","#0a1f4d",0.35,0.35);
+    var asOfY = metaLine ? 148 : 122;
 
     return '<defs><linearGradient id="gradBlueLHShared" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#3d6fc9"/><stop offset="45%" stop-color="#1a4fa8"/><stop offset="100%" stop-color="#0d2f6b"/></linearGradient>'
       + '<clipPath id="clipLHShared"><rect x="0" y="0" width="'+W+'" height="'+LH_H+'"/></clipPath></defs>'
@@ -3692,9 +3692,9 @@
       + '<image href="'+mhsLogoSrc+'" x="48" y="43" width="104" height="91" preserveAspectRatio="xMidYMid meet"/>'
       + (engLogoSrc ? '<image href="'+engLogoSrc+'" x="920" y="35" width="110" height="100" preserveAspectRatio="xMidYMid meet"/>' : "")
       + '<text x="178" y="55" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="21" letter-spacing="3" fill="'+GR_SILVER+'">MIDVIEW GIRLS SOCCER</text>'
-      + (metaLine ? '<text x="178" y="84" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="18" letter-spacing="2" fill="'+GR_WHITE+'">'+escapeHtml(metaLine)+'</text>' : "")
-      + '<text x="178" y="110" font-family="Arial, Helvetica, sans-serif" font-weight="400" font-size="18" fill="'+GR_SILVER+'">As of '+escapeHtml(asOf)+'</text>'
-      + '<text x="178" y="155" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="34" fill="'+GR_WHITE+'">'+escapeHtml(p.name.toUpperCase())+'</text>';
+      + '<text x="178" y="95" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="34" fill="'+GR_WHITE+'">'+escapeHtml(p.name.toUpperCase())+'</text>'
+      + (metaLine ? '<text x="178" y="122" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="18" letter-spacing="2" fill="'+GR_WHITE+'">'+escapeHtml(metaLine)+'</text>' : "")
+      + '<text x="178" y="'+asOfY+'" font-family="Arial, Helvetica, sans-serif" font-weight="400" font-size="18" fill="'+GR_SILVER+'">As of '+escapeHtml(asOf)+'</text>';
   }
   function buildPlayerGameTable(pid, games){
     var W = 1080, x0 = 80, w = W - 160;
@@ -3820,13 +3820,12 @@
     var isGK = playerIsGoalkeeper(pid);
     var gkFieldSvg = "";
     if(isGK){
-      var gkEvents = playerLocatedEvents(games, pid, ["saves","goalsAllowed","crossesClaimed","clearances"]);
+      var gkEvents = playerLocatedEvents(games, pid, ["saves","goalsAllowed","crossesClaimed"]);
       var gkMarkers = gkEvents.map(function(e){
         var x = e.loc.x*FIELD_W, y = e.loc.y*FIELD_H;
         if(e.stat === "saves") return prMarker(x,y,"circle",GR_BLUE,10);
         if(e.stat === "goalsAllowed") return prMarker(x,y,"circle","#c0392b",10);
-        if(e.stat === "crossesClaimed") return prMarker(x,y,"square",GR_BLUE,10);
-        return prMarker(x,y,"diamond",GR_BLUE,10);
+        return prMarker(x,y,"square",GR_BLUE,10);
       }).join("");
       gkFieldSvg = buildFieldDiagramSVG(null, gkMarkers, "prGkField", "0 "+(FIELD_H/2)+" "+FIELD_W+" "+(FIELD_H/2));
     }
@@ -3884,8 +3883,7 @@
     var GK_LEGEND = [
       {shape:"circle", color:GR_BLUE, label:"Save"},
       {shape:"circle", color:"#c0392b", label:"Goal Allowed"},
-      {shape:"square", color:GR_BLUE, label:"Cross Claimed"},
-      {shape:"diamond", color:GR_BLUE, label:"Clearance"}
+      {shape:"square", color:GR_BLUE, label:"Cross Claimed"}
     ];
 
     // Shot Map (attacking half) stacked above Blocks & Clearances (defensive half) --
