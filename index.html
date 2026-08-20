@@ -639,6 +639,11 @@
     <div id="eventLogOverlayContent"></div>
   </div>
 </div>
+<div id="playerReportOverlay" class="gs-preview-overlay" style="display:none;">
+  <div class="gs-preview-card" style="max-width:920px;">
+    <div id="playerReportOverlayContent"></div>
+  </div>
+</div>
 
 <script>
 (function(){
@@ -3430,6 +3435,11 @@
     svg += '<circle cx="'+badgeCx+'" cy="'+badgeCy+'" r="'+badgeR+'" fill="'+WHITE+'"/>';
     svg += '<image href="'+mhsLogoSrc+'" x="'+(badgeCx-badgeR*0.85)+'" y="'+(badgeCy-badgeR*0.75)+'" width="'+(badgeR*1.7)+'" height="'+(badgeR*1.5)+'" preserveAspectRatio="xMidYMid meet"/>';
 
+    var oppBadgeCx = 55, oppBadgeCy = (centerY+plotY1)/2, oppBadgeR = 28;
+    var oppAbbr = (g.opponent || "").trim().slice(0,3).toUpperCase();
+    svg += '<circle cx="'+oppBadgeCx+'" cy="'+oppBadgeCy+'" r="'+oppBadgeR+'" fill="'+WHITE+'"/>';
+    svg += '<text x="'+oppBadgeCx+'" y="'+(oppBadgeCy+8)+'" text-anchor="middle" font-family="Arial Black, Arial, sans-serif" font-weight="900" font-size="22" fill="'+OPP_GRAY+'">'+escapeHtml(oppAbbr)+'</text>';
+
     data.goalMarkers.forEach(function(m){
       var x = xFor(m.minute);
       svg += momentumSoccerBallSvg(x, m.type === "scored" ? plotY0-25 : plotY1+25, 14);
@@ -3696,7 +3706,7 @@
       + (metaLine ? '<text x="178" y="122" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="18" letter-spacing="2" fill="'+GR_WHITE+'">'+escapeHtml(metaLine)+'</text>' : "")
       + '<text x="178" y="'+asOfY+'" font-family="Arial, Helvetica, sans-serif" font-weight="400" font-size="18" fill="'+GR_SILVER+'">As of '+escapeHtml(asOf)+'</text>';
   }
-  function buildPlayerGameTable(pid, games){
+  function buildPlayerGameTable(pid, games, selectedGameId){
     var W = 1080, x0 = 80, w = W - 160;
     var dateW = 85, oppW = 150, typeW = 55;
     var numCols = ["G","A","SH","SOT","SOT%","BLK","CLR","TKL","SV","GA","CC","BPS"];
@@ -3735,8 +3745,11 @@
     });
 
     var ry = ty + headerH;
-    parts.push('<rect x="'+x0+'" y="'+ry+'" width="'+w+'" height="'+rowH+'" fill="'+GR_BLUE+'" fill-opacity="0.1"/>');
+    var seasonSelected = !selectedGameId;
+    parts.push('<g data-gamerow="__season__" style="cursor:pointer;">');
+    parts.push('<rect x="'+x0+'" y="'+ry+'" width="'+w+'" height="'+rowH+'" fill="'+GR_BLUE+'" fill-opacity="'+(seasonSelected?0.22:0.1)+'"/>');
     parts.push('<line x1="'+x0+'" y1="'+ry+'" x2="'+(x0+w)+'" y2="'+ry+'" stroke="'+GR_BLUE+'" stroke-width="1.5"/>');
+    if(seasonSelected) parts.push('<rect x="'+x0+'" y="'+ry+'" width="4" height="'+rowH+'" fill="'+GR_BLUE+'"/>');
     cx = x0;
     parts.push('<text x="'+(cx+10)+'" y="'+(ry+22)+'" font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="13" fill="'+GR_BLUE+'">SEASON TOTAL</text>');
     cx += dateW+oppW+typeW;
@@ -3744,12 +3757,16 @@
       parts.push('<text x="'+(cx+colW/2)+'" y="'+(ry+22)+'" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="800" font-size="13" fill="'+GR_BLUE+'">'+v+'</text>');
       cx += colW;
     });
+    parts.push('</g>');
     ry += rowH;
 
     games.forEach(function(g, i){
       var gTotals = aggregate([g]);
-      var bg = i % 2 === 0 ? GR_WHITE : "#f4f6f9";
+      var isSelected = selectedGameId === g.id;
+      var bg = isSelected ? "#dbe6f7" : (i % 2 === 0 ? GR_WHITE : "#f4f6f9");
+      parts.push('<g data-gamerow="'+g.id+'" style="cursor:pointer;">');
       parts.push('<rect x="'+x0+'" y="'+ry+'" width="'+w+'" height="'+rowH+'" fill="'+bg+'"/>');
+      if(isSelected) parts.push('<rect x="'+x0+'" y="'+ry+'" width="4" height="'+rowH+'" fill="'+GR_BLUE+'"/>');
       cx = x0;
       parts.push('<text x="'+(cx+10)+'" y="'+(ry+22)+'" font-family="Arial, Helvetica, sans-serif" font-weight="400" font-size="12" fill="'+GR_INK+'">'+escapeHtml(fmtDate(g.date))+'</text>');
       cx += dateW;
@@ -3766,30 +3783,88 @@
         parts.push('<text x="'+(cx+colW/2)+'" y="'+(ry+22)+'" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="400" font-size="12" fill="'+GR_INK+'">'+v+'</text>');
         cx += colW;
       });
+      parts.push('</g>');
       ry += rowH;
     });
 
     parts.push('<rect x="'+x0+'" y="'+ty+'" width="'+w+'" height="'+(headerH+rowH*totalRows)+'" fill="none" stroke="'+GR_LINE+'" stroke-width="1.5"/>');
     return { svg: parts.join(""), height: titleH + headerH + rowH*totalRows };
   }
-  function buildPlayerReportSVG(pid){
-    var p = state.roster.filter(function(r){ return r.id === pid; })[0];
-    if(!p) return "";
-    var games = playerCompletedGames(pid);
-    var W = 1080;
+  // ---------- Player Report (interactive) ----------
+  var playerReportState = null;
+
+  function prHtmlLegend(items){
+    var html = '<div style="display:flex; gap:14px; flex-wrap:wrap; justify-content:center; margin-top:8px; font-size:12px; color:var(--dim);">';
+    items.forEach(function(item){
+      var swatchSvg = '<svg width="16" height="16" viewBox="0 0 24 24" style="vertical-align:middle;">'+prMarker(12,12,item.shape,item.color,9)+'</svg>';
+      html += '<span>'+swatchSvg+' '+item.label+'</span>';
+    });
+    html += '</div>';
+    return html;
+  }
+  function prMapCellHtml(title, fieldSvg, aspectH, legendItems){
+    var out = '<div>';
+    out += '<div style="text-align:center; font-weight:700; font-size:15px; letter-spacing:0.5px; color:'+GR_BLUE+'; margin-bottom:8px;">'+title+'</div>';
+    out += '<div style="position:relative; aspect-ratio:'+FIELD_W+'/'+aspectH+'; border:1.5px solid var(--line, #2a3040); border-radius:8px; overflow:hidden;">'+fieldSvg+'</div>';
+    if(legendItems) out += prHtmlLegend(legendItems);
+    out += '</div>';
+    return out;
+  }
+  function prMapCellWithCanvasHtml(title, fieldSvg, aspectH, canvasId){
+    var out = '<div>';
+    out += '<div style="text-align:center; font-weight:700; font-size:15px; letter-spacing:0.5px; color:'+GR_BLUE+'; margin-bottom:8px;">'+title+'</div>';
+    out += '<div style="position:relative; aspect-ratio:'+FIELD_W+'/'+aspectH+'; border:1.5px solid var(--line, #2a3040); border-radius:8px; overflow:hidden;">';
+    out += fieldSvg;
+    out += '<canvas id="'+canvasId+'" style="position:absolute; inset:0; width:100%; height:100%; pointer-events:none;"></canvas>';
+    out += '</div></div>';
+    return out;
+  }
+
+  var PR_SHOT_LEGEND = [
+    {shape:"circle-star", color:GR_BLUE, label:"Goal"},
+    {shape:"circle", color:GR_BLUE, label:"On Target"},
+    {shape:"circle-outline", color:"#8a97a6", label:"Off Target"}
+  ];
+  var PR_DEF_LEGEND = [
+    {shape:"x", color:GR_BLUE, label:"Block"},
+    {shape:"diamond", color:GR_BLUE, label:"Clearance"}
+  ];
+  var PR_GK_LEGEND = [
+    {shape:"circle", color:GR_BLUE, label:"Save"},
+    {shape:"circle", color:"#c0392b", label:"Goal Allowed"},
+    {shape:"square", color:GR_BLUE, label:"Cross Claimed"}
+  ];
+
+  function renderPlayerReportOverlay(){
+    var p = state.roster.filter(function(r){ return r.id === playerReportState.pid; })[0];
+    if(!p){ closePlayerReportOverlay(); return; }
+    var allGames = playerCompletedGames(playerReportState.pid);
+    var filteredGames = allGames.filter(function(g){ return playerReportState.gameTypeFilter[g.gameType]; });
+    var scopedGames = playerReportState.selectedGameId
+      ? filteredGames.filter(function(g){ return g.id === playerReportState.selectedGameId; })
+      : filteredGames;
+    var selectedGame = playerReportState.selectedGameId
+      ? filteredGames.filter(function(g){ return g.id === playerReportState.selectedGameId; })[0]
+      : null;
 
     var letterhead = buildPlayerLetterheadSVG(p);
-    var tableTop = 190 + 40;
-    var table = buildPlayerGameTable(pid, games);
-    var sectionsTop = tableTop + table.height + 50;
+    var table = buildPlayerGameTable(playerReportState.pid, filteredGames, playerReportState.selectedGameId);
 
-    // Field-diagram cells laid out two per row.
-    var cellW = 460, cellH = cellW * (FIELD_H/FIELD_W);
-    var gapX = 40, gapY = 60;
-    var col0X = 80, col1X = 80 + cellW + gapX;
+    var html = "";
+    html += '<svg viewBox="0 0 1080 190" style="width:100%; height:auto; display:block; border-radius:10px; overflow:hidden;">'+letterhead+'</svg>';
 
-    var shotEvents = playerLocatedEvents(games, pid, ["shots"]).map(function(e){
-      var g = games.filter(function(gg){ return gg.events.indexOf(e) !== -1; })[0];
+    html += '<div class="chip-scroll" id="prGameTypeScroll" style="padding-top:14px; margin-bottom:4px;">';
+    GAME_TYPES.forEach(function(t){
+      var on = playerReportState.gameTypeFilter[t.key];
+      html += '<button class="chip'+(on?" selected":"")+'" data-prgametype="'+t.key+'">'+t.label+'</button>';
+    });
+    html += '</div>';
+
+    html += '<div style="overflow-x:auto; margin-top:12px;"><svg viewBox="0 0 1080 '+table.height+'" style="width:100%; height:auto; display:block; min-width:640px;">'+table.svg+'</svg></div>';
+    html += '<div style="text-align:center; margin:12px 0; font-size:13px; font-weight:700; color:'+GR_BLUE+';">'+(selectedGame ? "Showing: vs "+escapeHtml(selectedGame.opponent) : "Showing: Full Season")+'</div>';
+
+    var shotEvents = playerLocatedEvents(scopedGames, playerReportState.pid, ["shots"]).map(function(e){
+      var g = scopedGames.filter(function(gg){ return gg.events.indexOf(e) !== -1; })[0];
       var isGoal = g.events.some(function(x){ return x.stat==="goals" && x.ts===e.ts; });
       var onTarget = isGoal || g.events.some(function(x){ return x.stat==="shotsOnTarget" && x.ts===e.ts; });
       return { loc:e.loc, outcome: isGoal?"goal":(onTarget?"onTarget":"offTarget") };
@@ -3802,25 +3877,20 @@
     }).join("");
     var shotFieldSvg = buildFieldDiagramSVG(null, shotMarkers, "prShotField", "0 0 "+FIELD_W+" "+(FIELD_H/2));
 
-    var defEvents = playerLocatedEvents(games, pid, ["blocks","clearances"]);
+    var defEvents = playerLocatedEvents(scopedGames, playerReportState.pid, ["blocks","clearances"]);
     var defMarkers = defEvents.map(function(e){
       var x = e.loc.x*FIELD_W, y = e.loc.y*FIELD_H;
       return e.stat === "blocks" ? prMarker(x,y,"x",GR_BLUE,10) : prMarker(x,y,"diamond",GR_BLUE,10);
     }).join("");
     var defFieldSvg = buildFieldDiagramSVG(null, defMarkers, "prDefField", "0 "+(FIELD_H/2)+" "+FIELD_W+" "+(FIELD_H/2));
 
-    var allLocatedEvents = playerLocatedEvents(games, pid, VISIBLE_STATS.map(function(s){return s.key;}));
-    var heatmapImg = "";
-    if(allLocatedEvents.length > 0){
-      var dataUrl = heatmapDataURL(allLocatedEvents.map(function(e){ return e.loc; }), 340, 525);
-      heatmapImg = '<image href="'+dataUrl+'" x="0" y="0" width="'+FIELD_W+'" height="'+FIELD_H+'" preserveAspectRatio="none"/>';
-    }
-    var heatmapFieldSvg = buildFieldDiagramSVG(null, heatmapImg, "prHeatField");
+    var allLocatedEvents = playerLocatedEvents(scopedGames, playerReportState.pid, VISIBLE_STATS.map(function(s){return s.key;}));
+    var heatmapFieldSvg = buildFieldDiagramSVG(null, null, "prHeatField");
 
-    var isGK = playerIsGoalkeeper(pid);
+    var isGK = playerIsGoalkeeper(playerReportState.pid);
     var gkFieldSvg = "";
     if(isGK){
-      var gkEvents = playerLocatedEvents(games, pid, ["saves","goalsAllowed","crossesClaimed"]);
+      var gkEvents = playerLocatedEvents(scopedGames, playerReportState.pid, ["saves","goalsAllowed","crossesClaimed"]);
       var gkMarkers = gkEvents.map(function(e){
         var x = e.loc.x*FIELD_W, y = e.loc.y*FIELD_H;
         if(e.stat === "saves") return prMarker(x,y,"circle",GR_BLUE,10);
@@ -3828,6 +3898,147 @@
         return prMarker(x,y,"square",GR_BLUE,10);
       }).join("");
       gkFieldSvg = buildFieldDiagramSVG(null, gkMarkers, "prGkField", "0 "+(FIELD_H/2)+" "+FIELD_W+" "+(FIELD_H/2));
+    }
+
+    html += '<div style="display:flex; flex-wrap:wrap; gap:24px; margin-top:20px;">';
+    html += '<div style="flex:1 1 320px; display:flex; flex-direction:column; gap:18px;">';
+    html += prMapCellHtml("SHOT MAP", shotFieldSvg, FIELD_H/2, PR_SHOT_LEGEND);
+    html += prMapCellHtml("BLOCKS &amp; CLEARANCES", defFieldSvg, FIELD_H/2, PR_DEF_LEGEND);
+    html += '</div>';
+    html += '<div style="flex:1 1 320px;">';
+    html += prMapCellWithCanvasHtml("EVENT HEATMAP", heatmapFieldSvg, FIELD_H, "prHeatmapCanvas");
+    html += '</div>';
+    html += '</div>';
+
+    if(isGK){
+      html += '<div style="max-width:460px; margin:20px auto 0;">';
+      html += prMapCellHtml("GOALKEEPER ACTIONS", gkFieldSvg, FIELD_H/2, PR_GK_LEGEND);
+      html += '</div>';
+    }
+
+    if(can(getCurrentRole(), "playerCards", "export")){
+      html += '<button class="btn ghost block" id="playerReportExportBtn" style="margin-top:20px;">&#128190; Export as Image</button>';
+    }
+    html += '<button class="btn ghost block" id="playerReportCloseBtn" style="margin-top:10px;">Close</button>';
+
+    var prevGameTypeScroll = 0;
+    var existingGameTypeScroll = document.getElementById("prGameTypeScroll");
+    if(existingGameTypeScroll) prevGameTypeScroll = existingGameTypeScroll.scrollLeft;
+
+    document.getElementById("playerReportOverlayContent").innerHTML = html;
+    var newGameTypeScroll = document.getElementById("prGameTypeScroll");
+    if(newGameTypeScroll) newGameTypeScroll.scrollLeft = prevGameTypeScroll;
+
+    var canvasEl = document.getElementById("prHeatmapCanvas");
+    if(canvasEl) drawHeatmapCanvas(canvasEl, allLocatedEvents.map(function(e){ return e.loc; }));
+
+    wirePlayerReportControls();
+  }
+  function wirePlayerReportControls(){
+    document.querySelectorAll("[data-gamerow]").forEach(function(el){
+      el.addEventListener("click", function(){
+        var val = el.getAttribute("data-gamerow");
+        if(val === "__season__"){
+          playerReportState.selectedGameId = null;
+        } else if(playerReportState.selectedGameId === val){
+          playerReportState.selectedGameId = null; // clicking the same game again returns to season view
+        } else {
+          playerReportState.selectedGameId = val;
+        }
+        renderPlayerReportOverlay();
+      });
+    });
+    document.querySelectorAll("[data-prgametype]").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        var key = btn.getAttribute("data-prgametype");
+        playerReportState.gameTypeFilter[key] = !playerReportState.gameTypeFilter[key];
+        // If the currently-selected game just got filtered out, fall back to season view
+        // rather than leaving the maps pointed at a game that's no longer shown in the table.
+        if(playerReportState.selectedGameId){
+          var g = state.games.filter(function(gg){ return gg.id === playerReportState.selectedGameId; })[0];
+          if(!g || !playerReportState.gameTypeFilter[g.gameType]) playerReportState.selectedGameId = null;
+        }
+        renderPlayerReportOverlay();
+      });
+    });
+    var exportBtn = document.getElementById("playerReportExportBtn");
+    if(exportBtn) exportBtn.addEventListener("click", function(){
+      generatePlayerReportImage();
+    });
+    var closeBtn = document.getElementById("playerReportCloseBtn");
+    if(closeBtn) closeBtn.addEventListener("click", closePlayerReportOverlay);
+  }
+  function openPlayerReportForPlayer(pid){
+    if(!can(getCurrentRole(), "playerCards", "generate")){ showToast("You don't have permission to view this"); return; }
+    var gtf = {};
+    GAME_TYPES.forEach(function(t){ gtf[t.key] = true; });
+    playerReportState = { pid: pid, selectedGameId: null, gameTypeFilter: gtf };
+    renderPlayerReportOverlay();
+    document.getElementById("playerReportOverlay").style.display = "flex";
+  }
+  function closePlayerReportOverlay(){
+    document.getElementById("playerReportOverlay").style.display = "none";
+    playerReportState = null;
+  }
+
+  function buildPlayerReportExportSVG(){
+    var pid = playerReportState.pid, selectedGameId = playerReportState.selectedGameId;
+    var p = state.roster.filter(function(r){ return r.id === pid; })[0];
+    if(!p) return "";
+    var allGames = playerCompletedGames(pid);
+    var filteredGames = allGames.filter(function(g){ return playerReportState.gameTypeFilter[g.gameType]; });
+    var scopedGames = selectedGameId ? filteredGames.filter(function(g){ return g.id === selectedGameId; }) : filteredGames;
+    var W = 1080;
+
+    var letterhead = buildPlayerLetterheadSVG(p);
+    var tableTop = 190 + 40;
+    var table = buildPlayerGameTable(pid, filteredGames, selectedGameId);
+    var sectionsTop = tableTop + table.height + 50;
+
+    var cellW = 460, cellH = cellW * (FIELD_H/FIELD_W);
+    var gapX = 40, gapY = 60;
+    var col0X = 80, col1X = 80 + cellW + gapX;
+
+    var shotEvents = playerLocatedEvents(scopedGames, pid, ["shots"]).map(function(e){
+      var g = scopedGames.filter(function(gg){ return gg.events.indexOf(e) !== -1; })[0];
+      var isGoal = g.events.some(function(x){ return x.stat==="goals" && x.ts===e.ts; });
+      var onTarget = isGoal || g.events.some(function(x){ return x.stat==="shotsOnTarget" && x.ts===e.ts; });
+      return { loc:e.loc, outcome: isGoal?"goal":(onTarget?"onTarget":"offTarget") };
+    });
+    var shotMarkers = shotEvents.map(function(s){
+      var x = s.loc.x*FIELD_W, y = s.loc.y*FIELD_H;
+      if(s.outcome === "goal") return prMarker(x,y,"circle-star",GR_BLUE,10);
+      if(s.outcome === "onTarget") return prMarker(x,y,"circle",GR_BLUE,10);
+      return prMarker(x,y,"circle-outline","#ffffff",10);
+    }).join("");
+    var shotFieldSvg = buildFieldDiagramSVG(null, shotMarkers, "prExpShotField", "0 0 "+FIELD_W+" "+(FIELD_H/2));
+
+    var defEvents = playerLocatedEvents(scopedGames, pid, ["blocks","clearances"]);
+    var defMarkers = defEvents.map(function(e){
+      var x = e.loc.x*FIELD_W, y = e.loc.y*FIELD_H;
+      return e.stat === "blocks" ? prMarker(x,y,"x",GR_BLUE,10) : prMarker(x,y,"diamond",GR_BLUE,10);
+    }).join("");
+    var defFieldSvg = buildFieldDiagramSVG(null, defMarkers, "prExpDefField", "0 "+(FIELD_H/2)+" "+FIELD_W+" "+(FIELD_H/2));
+
+    var allLocatedEvents = playerLocatedEvents(scopedGames, pid, VISIBLE_STATS.map(function(s){return s.key;}));
+    var heatmapImg = "";
+    if(allLocatedEvents.length > 0){
+      var dataUrl = heatmapDataURL(allLocatedEvents.map(function(e){ return e.loc; }), 340, 525);
+      heatmapImg = '<image href="'+dataUrl+'" x="0" y="0" width="'+FIELD_W+'" height="'+FIELD_H+'" preserveAspectRatio="none"/>';
+    }
+    var heatmapFieldSvg = buildFieldDiagramSVG(null, heatmapImg, "prExpHeatField");
+
+    var isGK = playerIsGoalkeeper(pid);
+    var gkFieldSvg = "";
+    if(isGK){
+      var gkEvents = playerLocatedEvents(scopedGames, pid, ["saves","goalsAllowed","crossesClaimed"]);
+      var gkMarkers = gkEvents.map(function(e){
+        var x = e.loc.x*FIELD_W, y = e.loc.y*FIELD_H;
+        if(e.stat === "saves") return prMarker(x,y,"circle",GR_BLUE,10);
+        if(e.stat === "goalsAllowed") return prMarker(x,y,"circle","#c0392b",10);
+        return prMarker(x,y,"square",GR_BLUE,10);
+      }).join("");
+      gkFieldSvg = buildFieldDiagramSVG(null, gkMarkers, "prExpGkField", "0 "+(FIELD_H/2)+" "+FIELD_W+" "+(FIELD_H/2));
     }
 
     var cells = [
@@ -3838,23 +4049,28 @@
     if(isGK) cells.push({title:"GOALKEEPER ACTIONS", field:gkFieldSvg});
 
     var halfCellH = cellW * ((FIELD_H/2)/FIELD_W);
-    var stackGap = 20;
-    var legendH = 32;
+    var stackGap = 20, legendH = 32;
     var col1StackH = (30+halfCellH+legendH) + stackGap + (30+halfCellH+legendH);
     var col2H = 30+cellH;
     var pairedRowH = Math.max(col1StackH, col2H);
     var gkH = isGK ? (30+halfCellH+legendH) : 0;
     var H = sectionsTop + pairedRowH + (isGK ? gapY+gkH : 0) + 60;
 
-    function mapLegend(items, x, y, w){
+    function svgLegend(items, x, y, w){
       var slotW = w / items.length;
       var out = "";
       items.forEach(function(item, i){
-        var swatchX = x + slotW*i + 15;
-        var swatchY = y + 15;
+        var swatchX = x + slotW*i + 15, swatchY = y + 15;
         out += prMarker(swatchX, swatchY, item.shape, item.color, 8);
         out += '<text x="'+(swatchX+17)+'" y="'+(swatchY+4)+'" font-family="Arial, Helvetica, sans-serif" font-weight="400" font-size="12" fill="'+GR_DIM+'">'+item.label+'</text>';
       });
+      return out;
+    }
+    function mapCell(title, field, x, y, cw, ch, legendItems){
+      var out = '<text x="'+(x+cw/2)+'" y="'+(y+18)+'" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="16" letter-spacing="1" fill="'+GR_BLUE+'">'+title+'</text>';
+      out += '<svg x="'+x+'" y="'+(y+30)+'" width="'+cw+'" height="'+ch+'" viewBox="0 0 '+cw+' '+ch+'">'+field+'</svg>';
+      out += '<rect x="'+x+'" y="'+(y+30)+'" width="'+cw+'" height="'+ch+'" fill="none" stroke="'+GR_LINE+'" stroke-width="1.5"/>';
+      if(legendItems) out += svgLegend(legendItems, x, y+30+ch, cw);
       return out;
     }
 
@@ -3863,55 +4079,30 @@
     svg += '<svg x="0" y="0" width="'+W+'" height="190" viewBox="0 0 '+W+' 190">'+letterhead+'</svg>';
     svg += '<g transform="translate(0,'+tableTop+')">'+table.svg+'</g>';
 
-    function mapCell(title, field, x, y, cw, ch, legendItems){
-      var out = '<text x="'+(x+cw/2)+'" y="'+(y+18)+'" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="16" letter-spacing="1" fill="'+GR_BLUE+'">'+title+'</text>';
-      out += '<svg x="'+x+'" y="'+(y+30)+'" width="'+cw+'" height="'+ch+'" viewBox="0 0 '+cw+' '+ch+'">'+field+'</svg>';
-      out += '<rect x="'+x+'" y="'+(y+30)+'" width="'+cw+'" height="'+ch+'" fill="none" stroke="'+GR_LINE+'" stroke-width="1.5"/>';
-      if(legendItems) out += mapLegend(legendItems, x, y+30+ch, cw);
-      return out;
-    }
+    var selectedGame = selectedGameId ? filteredGames.filter(function(g){ return g.id===selectedGameId; })[0] : null;
+    var scopeLabel = selectedGame ? ("vs " + (selectedGame.opponent||"")).toUpperCase() : "FULL SEASON";
+    svg += '<text x="'+(W/2)+'" y="'+(tableTop+table.height+30)+'" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="13" letter-spacing="1" fill="'+GR_BLUE+'">SHOWING: '+escapeHtml(scopeLabel)+'</text>';
 
-    var SHOT_LEGEND = [
-      {shape:"circle-star", color:GR_BLUE, label:"Goal"},
-      {shape:"circle", color:GR_BLUE, label:"On Target"},
-      {shape:"circle-outline", color:"#8a97a6", label:"Off Target"}
-    ];
-    var DEF_LEGEND = [
-      {shape:"x", color:GR_BLUE, label:"Block"},
-      {shape:"diamond", color:GR_BLUE, label:"Clearance"}
-    ];
-    var GK_LEGEND = [
-      {shape:"circle", color:GR_BLUE, label:"Save"},
-      {shape:"circle", color:"#c0392b", label:"Goal Allowed"},
-      {shape:"square", color:GR_BLUE, label:"Cross Claimed"}
-    ];
-
-    // Shot Map (attacking half) stacked above Blocks & Clearances (defensive half) --
-    // together they read as one full pitch split by purpose, lined up beside the
-    // full-field heatmap rather than each taking a full-height cell of their own.
-    // Each field diagram already has its own crop baked in via buildFieldDiagramSVG's
-    // viewBoxOverride -- this wrapper is just a plain pixel viewport, not a second crop.
     var shotMapY = sectionsTop;
-    svg += mapCell(cells[0].title, cells[0].field, col0X, shotMapY, cellW, halfCellH, SHOT_LEGEND);
+    svg += mapCell(cells[0].title, cells[0].field, col0X, shotMapY, cellW, halfCellH, PR_SHOT_LEGEND);
     var defMapY = shotMapY + 30 + halfCellH + legendH + stackGap;
-    svg += mapCell(cells[1].title, cells[1].field, col0X, defMapY, cellW, halfCellH, DEF_LEGEND);
-
+    svg += mapCell(cells[1].title, cells[1].field, col0X, defMapY, cellW, halfCellH, PR_DEF_LEGEND);
     svg += mapCell(cells[2].title, cells[2].field, col1X, sectionsTop, cellW, cellH);
-
     if(isGK){
       var gkY = sectionsTop + pairedRowH + gapY;
-      svg += mapCell(cells[3].title, cells[3].field, col0X, gkY, cellW, halfCellH, GK_LEGEND);
+      svg += mapCell(cells[3].title, cells[3].field, col0X, gkY, cellW, halfCellH, PR_GK_LEGEND);
     }
 
     svg += '</svg>';
     return svg;
   }
-  function generatePlayerReportImage(pid){
-    if(!can(getCurrentRole(), "playerCards", "generate")){ showToast("You don't have permission to generate this"); return; }
-    var p = state.roster.filter(function(r){ return r.id === pid; })[0];
+  function generatePlayerReportImage(){
+    if(!playerReportState) return;
+    if(!can(getCurrentRole(), "playerCards", "export")){ showToast("You don't have permission to export this"); return; }
+    var p = state.roster.filter(function(r){ return r.id === playerReportState.pid; })[0];
     if(!p) return;
-    showToast("Generating report\u2026");
-    var svgStr = buildPlayerReportSVG(pid);
+    showToast("Generating image\u2026");
+    var svgStr = buildPlayerReportExportSVG();
     var svgBlob = new Blob([svgStr], {type: "image/svg+xml;charset=utf-8"});
     var url = URL.createObjectURL(svgBlob);
     var img = new Image();
@@ -3923,17 +4114,19 @@
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
       URL.revokeObjectURL(url);
       canvas.toBlob(function(blob){
-        if(!blob){ showToast("Couldn't generate the report \u2014 try again"); return; }
-        var filename = "midview-player-" + p.name.replace(/[^a-z0-9]+/gi,"-").toLowerCase() + ".png";
+        if(!blob){ showToast("Couldn't generate the image \u2014 try again"); return; }
+        var scopeSuffix = playerReportState.selectedGameId ? "-game" : "-season";
+        var filename = "midview-player-" + p.name.replace(/[^a-z0-9]+/gi,"-").toLowerCase() + scopeSuffix + ".png";
         gsShowPreview(blob, filename);
       }, "image/png");
     };
     img.onerror = function(){
-      showToast("Couldn't generate the report \u2014 try again");
+      showToast("Couldn't generate the image \u2014 try again");
       URL.revokeObjectURL(url);
     };
     img.src = url;
   }
+
 
 
   function downloadCSV(rows, filename){
@@ -3955,6 +4148,95 @@
     a.click();
     document.body.removeChild(a);
     setTimeout(function(){ URL.revokeObjectURL(url); }, 2000);
+  }
+
+  // ---------- MaxPreps Export ----------
+  function downloadTxt(content, filename){
+    var blob = new Blob([content], {type:"text/plain"});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 2000);
+  }
+  function gameOutcome(g){
+    var score = computeScore(g); // already excludes shootout-period goals
+    var st = shootoutTally(g);
+    if(st.decided) return st.winner === "us" ? "win" : "loss";
+    if(score.our > score.their) return "win";
+    if(score.our < score.their) return "loss";
+    return "tie";
+  }
+  function computeGameWinningGoal(g){
+    // The goal that brought our running score to (their final score + 1) for the first
+    // time -- from that point on, since scores only increase, they can never draw level
+    // again. Only meaningful for a game actually decided in regulation/OT; a shootout
+    // decides the match some other way, so no single goal "won" it.
+    var score = computeScore(g);
+    if(score.our <= score.their) return null;
+    if(shootoutTally(g).decided) return null;
+    var ourGoals = g.events.filter(function(e){
+      return e.stat === "goals" && eventPeriod(e) !== "Shootout";
+    }).slice().sort(function(a,b){ return a.ts - b.ts; });
+    var targetIndex = score.their; // 0-indexed: the (their+1)-th goal sits at this index
+    return ourGoals[targetIndex] ? ourGoals[targetIndex].playerId : null;
+  }
+  function buildMaxPrepsRows(g){
+    var totals = aggregate([g]);
+    var outcome = gameOutcome(g);
+    var gwgScorer = computeGameWinningGoal(g);
+    var header = ["Jersey","Goals","Assists","Shots","ShotsOnGoal","Steals","PenaltyKicksMade","PenaltyKicksAttempted","GameWinningGoal","GoalsAgainst","Saves","OpponentShotsOnGoal","OpponentPenaltyKickSaves","OpponentPenaltyKickAttempts","ShutOuts","Win","Loss","Tie"];
+    var rows = [header];
+    g.playerIds.forEach(function(pid){
+      var p = state.roster.filter(function(r){ return r.id === pid; })[0];
+      if(!p) return;
+      var t = totals[pid] || {};
+      var isGKThisGame = g.events.some(function(e){
+        return e.playerId === pid && (e.stat==="saves" || e.stat==="goalsAllowed" || e.stat==="crossesClaimed");
+      });
+      rows.push([
+        p.number,
+        t.goals||0,
+        t.assists||0,
+        t.shots||0,
+        t.shotsOnTarget||0,
+        t.tackles||0,
+        t.pkGoals||0,
+        (t.pkGoals||0)+(t.pkShotsSaved||0)+(t.pkShotsMissed||0),
+        gwgScorer===pid ? 1 : 0,
+        t.goalsAllowed||0,
+        t.saves||0,
+        (t.saves||0)+(t.goalsAllowed||0),
+        t.oppPkSaved||0,
+        (t.oppPkSaved||0)+(t.oppPkGoalsAllowed||0)+(t.oppPkMissed||0),
+        (isGKThisGame && (t.goalsAllowed||0)===0) ? 1 : 0,
+        (isGKThisGame && outcome==="win") ? 1 : 0,
+        (isGKThisGame && outcome==="loss") ? 1 : 0,
+        (isGKThisGame && outcome==="tie") ? 1 : 0
+      ]);
+    });
+    return rows;
+  }
+  function exportMaxPrepsForGame(gameId){
+    if(!can(getCurrentRole(), "season", "csvExport")){ showToast("You don't have permission to export this"); return; }
+    var g = state.games.filter(function(gg){ return gg.id===gameId; })[0];
+    if(!g) return;
+    var missingJersey = g.playerIds.filter(function(pid){
+      var p = state.roster.filter(function(r){ return r.id === pid; })[0];
+      return !p || !p.number;
+    }).map(function(pid){ return playerName(pid); });
+    if(missingJersey.length > 0){
+      showToast("Missing jersey #: " + missingJersey.join(", "));
+      return;
+    }
+    var rows = buildMaxPrepsRows(g);
+    var content = rows.map(function(r){ return r.join("|"); }).join("\n");
+    var filename = "maxpreps-vs-" + (g.opponent||"opponent").replace(/[^a-z0-9]+/gi,"-").toLowerCase() + "-" + g.date + ".txt";
+    downloadTxt(content, filename);
+    showToast("MaxPreps file downloaded");
   }
 
   function toCSV(totals, playerIds, label){
@@ -4008,6 +4290,7 @@
     var canViewShotReport = can(role, "shotReport", "view");
     var canGeneratePlayerReport = can(role, "playerCards", "generate");
     var canGenerateMomentum = can(role, "momentumChart", "generate");
+    var canExportMaxPreps = can(role, "season", "csvExport");
     var canViewEventLog = can(role, "eventLog", "view");
 
     var allCompleted = state.games.filter(function(g){ return g.status==="completed"; });
@@ -4117,6 +4400,7 @@
         if(canViewHeatmap) rowButtons.push('<button class="btn ghost small" data-heatmapgame="'+g.id+'">&#128293; Heatmap</button>');
         if(canViewShotReport) rowButtons.push('<button class="btn ghost small" data-shotreportgame="'+g.id+'">&#127919; Shot Report</button>');
         if(canGenerateMomentum) rowButtons.push('<button class="btn ghost small" data-momentumgame="'+g.id+'">&#128202; Match Momentum</button>');
+        if(canExportMaxPreps) rowButtons.push('<button class="btn ghost small" data-maxprepsgame="'+g.id+'">&#128190; MaxPreps Export</button>');
         if(canViewEventLog) rowButtons.push('<button class="btn ghost small" data-eventloggame="'+g.id+'">&#128220; Event Log</button>');
         if(canExport) rowButtons.push('<button class="btn ghost small" data-exportgame="'+g.id+'">Export CSV</button>');
         if(canDeleteGame) rowButtons.push('<button class="btn ghost small" data-delgame="'+g.id+'">'+(g.cloudStatus==="uploaded" ? "Delete Everywhere" : "Delete")+'</button>');
@@ -4204,6 +4488,13 @@
         generateMomentumChartImage(id);
       });
     });
+    document.querySelectorAll("[data-maxprepsgame]").forEach(function(btn){
+      btn.addEventListener("click", function(e){
+        e.stopPropagation();
+        var id = btn.getAttribute("data-maxprepsgame");
+        exportMaxPrepsForGame(id);
+      });
+    });
     document.querySelectorAll("[data-eventloggame]").forEach(function(btn){
       btn.addEventListener("click", function(e){
         e.stopPropagation();
@@ -4224,7 +4515,7 @@
       var sel = document.getElementById("playerReportSelect");
       var pid = sel ? sel.value : "";
       if(!pid){ showToast("Pick a player first"); return; }
-      generatePlayerReportImage(pid);
+      openPlayerReportForPlayer(pid);
     });
     document.querySelectorAll("[data-toggle]").forEach(function(el){
       el.addEventListener("click", function(){
