@@ -669,6 +669,11 @@
     {key:"saves", label:"Save", ic:"&#129508;"},
     {key:"crossesClaimed", label:"Cross Claimed", ic:"&#128588;"}
   ];
+  var TEAM_STATS = [
+    {key:"corners", label:"Corner Kick", ic:"&#128681;"},
+    {key:"fouls", label:"Foul", ic:"&#9888;"},
+    {key:"offsides", label:"Offside", ic:"&#128679;"}
+  ];
   // PK-specific bookkeeping stats. Each of these ALSO feeds a regular stat above (a PK
   // goal is still a "goals" event, a PK save is still a "saves" event, etc.) -- these
   // exist purely so a PK-specific report can be built later without re-deriving it from
@@ -974,6 +979,7 @@
           if(!g.cloudStatus) g.cloudStatus = "local";
           if(!g.gameType) g.gameType = g.isTournament ? "tournament" : "varsity";
           if(g.motm === undefined) g.motm = null;
+          if(!g.teamEvents) g.teamEvents = [];
         });
       }
       return parsed;
@@ -1460,6 +1466,13 @@
       });
       html += '<button class="stat-btn basic" data-pickevent="oppPk"><span class="ic">&#9917;</span>Opponent PK</button>';
       html += '</div>';
+      html += '<h2 class="section-title">Team Stats</h2>';
+      html += '<div class="stat-grid">';
+      TEAM_STATS.forEach(function(s){
+        html += '<button class="stat-btn basic" data-teamstat="'+s.key+'" data-team="us"><span class="ic">'+s.ic+'</span>' + s.label + ' (Midview)</button>';
+        html += '<button class="stat-btn basic" data-teamstat="'+s.key+'" data-team="them"><span class="ic">'+s.ic+'</span>' + s.label + ' (Opponent)</button>';
+      });
+      html += '</div>';
     } else if(entryState.step === "player"){
       var label = statLabel(entryState.rootKey);
       var prompt = EVENT_PROMPTS[entryState.rootKey] || ("Select player for " + label);
@@ -1586,6 +1599,24 @@
         entryState.clockSec = computePeriodElapsed(g);
         entryState.period = periodLabel(g, g.periodKey);
         entryState.step = "player";
+        renderGame();
+      });
+    });
+    document.querySelectorAll("[data-teamstat]").forEach(function(btn){
+      btn.addEventListener("click", function(){
+        var key = btn.getAttribute("data-teamstat");
+        var team = btn.getAttribute("data-team");
+        var stat = TEAM_STATS.filter(function(s){ return s.key === key; })[0];
+        g.teamEvents.push({
+          id: uid("te"),
+          team: team,
+          stat: key,
+          ts: Date.now(),
+          clockSec: computePeriodElapsed(g),
+          period: periodLabel(g, g.periodKey)
+        });
+        save();
+        showToast(stat.label + " \u2014 " + (team === "us" ? "Midview" : "Opponent"));
         renderGame();
       });
     });
@@ -1916,9 +1947,16 @@
     });
     wireTrackingSection(g);
     document.getElementById("undoBtn").addEventListener("click", function(){
-      if(g.events.length===0) return;
-      var last = g.events.reduce(function(a,b){ return a.ts>b.ts ? a : b; });
-      g.events = g.events.filter(function(e){ return e.ts!==last.ts; });
+      var lastPlayerEvt = g.events.length ? g.events.reduce(function(a,b){ return a.ts>b.ts ? a : b; }) : null;
+      var lastTeamEvt = g.teamEvents.length ? g.teamEvents.reduce(function(a,b){ return a.ts>b.ts ? a : b; }) : null;
+      if(!lastPlayerEvt && !lastTeamEvt) return;
+      if(lastTeamEvt && (!lastPlayerEvt || lastTeamEvt.ts > lastPlayerEvt.ts)){
+        // Team stats are always logged as a single standalone event, never part of a
+        // multi-event action the way a goal is, so just remove this one by id.
+        g.teamEvents = g.teamEvents.filter(function(e){ return e.id !== lastTeamEvt.id; });
+      } else {
+        g.events = g.events.filter(function(e){ return e.ts !== lastPlayerEvt.ts; });
+      }
       save();
       renderGame();
     });
@@ -2200,6 +2238,7 @@
         date: date,
         playerIds: ids,
         events: [],
+        teamEvents: [],
         gameType: gameType,
         periodPlan: periodPlan,
         periodKey: periodPlan[0].key,
@@ -3131,6 +3170,16 @@
       .sort(function(a,b){ return (totals[b].saves||0) - (totals[a].saves||0); })
       .map(function(pid){ return {name: playerName(pid), count: totals[pid].saves}; });
   }
+  function teamStatCounts(g){
+    var counts = {};
+    TEAM_STATS.forEach(function(s){ counts[s.key] = {us:0, them:0}; });
+    (g.teamEvents || []).forEach(function(e){
+      if(!counts[e.stat]) return;
+      if(e.team === "us") counts[e.stat].us++;
+      else counts[e.stat].them++;
+    });
+    return counts;
+  }
   function grTable(x, y, w, headers, statCenters, rows, title){
     var parts = [];
     var rowH = 42, headerH = 48, titleH = 34;
@@ -3221,7 +3270,8 @@
     var TIMELINE_ROW_H = 46, PERIOD_ROW_H = 40;
     var timelineH = timeline.reduce(function(sum,t){ return sum + (t.type==="period" ? PERIOD_ROW_H : TIMELINE_ROW_H); }, 0);
     var BOXSCORE_H = 34 + 14 + timelineH + 20 + 34;
-    var STATS_TOP = BOXSCORE_TOP + BOXSCORE_H + 70;
+    var TEAMSTATS_H = 34 + 20 + 3*28 + 20;
+    var STATS_TOP = BOXSCORE_TOP + BOXSCORE_H + 40 + TEAMSTATS_H + 30;
 
     var attackT = grTable(80, 0, 920, attackHeaders, grStatColCenters(4,FIRST_COL_X,LAST_COL_X), attackRows, "ATTACKING");
     var defendT = grTable(80, 0, 920, defendHeaders, grStatColCenters(3,FIRST_COL_X,LAST_COL_X), defendRows, "DEFENDING");
@@ -3269,6 +3319,27 @@
     gy += 20;
     var savesText = saveEntries.length ? saveEntries.map(function(s){ return s.name+" ("+s.count+")"; }).join(", ") : "None";
     svg += '<text x="80" y="'+(gy+18)+'" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="18" letter-spacing="1" fill="'+GR_BLUE+'">SAVES <tspan fill="'+GR_DIM+'" font-weight="400">&#8211;</tspan> <tspan fill="'+GR_INK+'" font-weight="700">'+escapeHtml(savesText)+'</tspan></text>';
+
+    var tsTop = BOXSCORE_TOP + BOXSCORE_H + 40;
+    var tsCounts = teamStatCounts(g);
+    var colUsX = W-220, colThemX = W-80;
+    svg += '<text x="80" y="'+(tsTop+22)+'" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="22" letter-spacing="2" fill="'+GR_BLUE+'">TEAM STATS</text>';
+    svg += '<line x1="80" y1="'+(tsTop+34)+'" x2="'+(W-80)+'" y2="'+(tsTop+34)+'" stroke="'+GR_LINE+'" stroke-width="2"/>';
+    var thY = tsTop + 34 + 20;
+    svg += '<text x="'+colUsX+'" y="'+thY+'" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="13" letter-spacing="1" fill="'+GR_DIM+'">MIDVIEW</text>';
+    svg += '<text x="'+colThemX+'" y="'+thY+'" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="13" letter-spacing="1" fill="'+GR_DIM+'">OPPONENT</text>';
+    var tsRowY = thY + 28;
+    [
+      {label:"Corner Kicks", key:"corners"},
+      {label:"Fouls", key:"fouls"},
+      {label:"Offsides", key:"offsides"}
+    ].forEach(function(row){
+      var c = tsCounts[row.key];
+      svg += '<text x="80" y="'+tsRowY+'" font-family="Arial, Helvetica, sans-serif" font-weight="400" font-size="16" fill="'+GR_INK+'">'+row.label+'</text>';
+      svg += '<text x="'+colUsX+'" y="'+tsRowY+'" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="16" fill="'+GR_BLUE+'">'+c.us+'</text>';
+      svg += '<text x="'+colThemX+'" y="'+tsRowY+'" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="16" fill="'+GR_INK+'">'+c.them+'</text>';
+      tsRowY += 28;
+    });
 
     var sy = STATS_TOP;
     svg += '<text x="80" y="'+sy+'" font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="22" letter-spacing="2" fill="'+GR_BLUE+'">PLAYER STATS</text>';
@@ -4684,6 +4755,7 @@
   function mergeCloudGames(cloudGames){
     var changed = false;
     cloudGames.forEach(function(cg){
+      if(!cg.teamEvents) cg.teamEvents = [];
       var idx = -1;
       for(var i=0;i<state.games.length;i++){ if(state.games[i].id===cg.id){ idx=i; break; } }
       if(idx===-1){
